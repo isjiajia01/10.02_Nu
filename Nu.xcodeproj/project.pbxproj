@@ -6,7 +6,12 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		07212D762F3CA3F700AC4FAB /* airead.json in Resources */ = {isa = PBXBuildFile; fileRef = 07212D752F3CA3EE00AC4FAB /* airead.json */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXFileReference section */
+		07212D752F3CA3EE00AC4FAB /* airead.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = airead.json; sourceTree = "<group>"; };
 		073B1FFE2F3C6BA800935AB6 /* Nu.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Nu.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -32,6 +37,7 @@
 		073B1FF52F3C6BA800935AB6 = {
 			isa = PBXGroup;
 			children = (
+				07212D752F3CA3EE00AC4FAB /* airead.json */,
 				073B20002F3C6BA800935AB6 /* Nu */,
 				073B1FFF2F3C6BA800935AB6 /* Products */,
 			);
@@ -90,7 +96,6 @@
 			hasScannedForEncodings = 0;
 			knownRegions = (
 				en,
-				Base,
 			);
 			mainGroup = 073B1FF52F3C6BA800935AB6;
 			minimizedProjectReferenceProxies = 1;
@@ -109,6 +114,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				07212D762F3CA3F700AC4FAB /* airead.json in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -251,8 +257,11 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 777MCA2PWS;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Your location is used to show nearby stations and transport departures on the map.";
+				INFOPLIST_KEY_REJSEPLANEN_ACCESS_ID = "$(REJSEPLANEN_ACCESS_ID)";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -265,6 +274,7 @@
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = Jiajia.Nu;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				REJSEPLANEN_ACCESS_ID = "";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
@@ -282,8 +292,11 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 777MCA2PWS;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Your location is used to show nearby stations and transport departures on the map.";
+				INFOPLIST_KEY_REJSEPLANEN_ACCESS_ID = "$(REJSEPLANEN_ACCESS_ID)";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -296,6 +309,7 @@
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = Jiajia.Nu;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				REJSEPLANEN_ACCESS_ID = "";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
