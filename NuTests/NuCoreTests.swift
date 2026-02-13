@@ -1,5 +1,7 @@
 import XCTest
 @testable import Nu
+import CoreLocation
+import Combine
 
 final class NuCoreTests: XCTestCase {
     func testJourneyDetailURLEncodingEncodesPipe() throws {
@@ -142,5 +144,123 @@ final class NuCoreTests: XCTestCase {
         formatter.timeZone = TimeZone(identifier: "Europe/Copenhagen")
         formatter.dateFormat = "yyyy-MM-dd HH:mm"
         return formatter.date(from: value)!
+    }
+
+    @MainActor
+    func testNearbyViewModelRefreshBuildsGroupedStations() async {
+        let locationManager = MockLocationManager(
+            authorizationStatus: .authorizedWhenInUse,
+            currentLocation: CLLocation(latitude: 55.68748, longitude: 12.54692)
+        )
+        let service = MockIntegrationAPIService(
+            nearbyStopsResult: [
+                StationModel(
+                    id: "1",
+                    name: "Nuuks Plads St. (Rantzausgade)",
+                    latitude: 55.68748,
+                    longitude: 12.54692,
+                    distanceMeters: 80,
+                    type: "BUS"
+                ),
+                StationModel(
+                    id: "2",
+                    name: "Nuuks Plads St. (Jagtvej)",
+                    latitude: 55.68760,
+                    longitude: 12.54680,
+                    distanceMeters: 110,
+                    type: "BUS"
+                )
+            ]
+        )
+        let vm = NearbyStationsViewModel(apiService: service, locationManager: locationManager)
+
+        await vm.refreshNearbyStations()
+
+        XCTAssertEqual(vm.stationGroups.count, 1)
+        XCTAssertEqual(vm.filteredStationGroups.first?.entranceCount, 2)
+        XCTAssertEqual(vm.state, .success)
+    }
+
+    @MainActor
+    func testDepartureBoardViewModelFetchPopulatesDepartures() async {
+        let service = MockIntegrationAPIService(
+            departuresResult: [
+                Departure(
+                    name: "68",
+                    type: "BUS",
+                    stop: "Nuuks Plads",
+                    time: "13:30",
+                    date: "13.02.26",
+                    rtTime: "13:32",
+                    rtDate: "13.02.26",
+                    direction: "Bella Center",
+                    finalStop: "Bella Center",
+                    track: nil,
+                    messages: nil
+                )
+            ]
+        )
+        let vm = DepartureBoardViewModel(
+            stationId: "test-station",
+            apiService: service,
+            locationManager: MockLocationManager(authorizationStatus: .denied, currentLocation: nil)
+        )
+
+        await vm.fetchDepartures()
+
+        XCTAssertEqual(vm.departures.count, 1)
+        XCTAssertEqual(vm.state, .success)
+    }
+}
+
+private final class MockLocationManager: LocationManaging {
+    var authorizationStatus: CLAuthorizationStatus
+    var currentLocation: CLLocation?
+
+    private let authorizationSubject: CurrentValueSubject<CLAuthorizationStatus, Never>
+    private let locationSubject: CurrentValueSubject<CLLocation?, Never>
+
+    init(authorizationStatus: CLAuthorizationStatus, currentLocation: CLLocation?) {
+        self.authorizationStatus = authorizationStatus
+        self.currentLocation = currentLocation
+        self.authorizationSubject = CurrentValueSubject(authorizationStatus)
+        self.locationSubject = CurrentValueSubject(currentLocation)
+    }
+
+    var authorizationStatusPublisher: AnyPublisher<CLAuthorizationStatus, Never> {
+        authorizationSubject.eraseToAnyPublisher()
+    }
+
+    var currentLocationPublisher: AnyPublisher<CLLocation?, Never> {
+        locationSubject.eraseToAnyPublisher()
+    }
+
+    func requestAuthorization() {}
+    func startUpdatingLocation() {}
+    func stopUpdatingLocation() {}
+}
+
+private struct MockIntegrationAPIService: APIServiceProtocol {
+    var nearbyStopsResult: [StationModel] = []
+    var departuresResult: [Departure] = []
+
+    func fetchNearbyStops(coordX: Double, coordY: Double, radiusMeters: Int?, maxNo: Int?) async throws -> [StationModel] {
+        nearbyStopsResult
+    }
+
+    func fetchDepartures(for stationID: String) async throws -> [Departure] {
+        departuresResult
+    }
+
+    func fetchDepartures(forStationIDs stationIDs: [String], maxJourneys: Int, filters: MultiDepartureFilters) async throws -> [Departure] {
+        departuresResult
+    }
+
+    func searchLocations(input: String) async throws -> [StationModel] {
+        nearbyStopsResult
+    }
+
+    func fetchJourneyDetail(id: String, date: String?) async throws -> JourneyDetail {
+        JourneyDetail(stops: [])
     }
 }

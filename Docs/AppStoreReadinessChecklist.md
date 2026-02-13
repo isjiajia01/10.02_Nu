@@ -58,3 +58,5 @@ rg -n "Vi bruger din lokation|defaultAccessID|print\(" Nu
   - `NuCoreTests.testORServiceCatchProbabilityStates`
   - `NuCoreTests.testJourneyProgressEstimatorInStopWindow`
   - `NuCoreTests.testJourneyProgressEstimatorAfterDestination`
+  - `NuCoreTests.testNearbyViewModelRefreshBuildsGroupedStations` (Nearby -> grouped station flow)
+  - `NuCoreTests.testDepartureBoardViewModelFetchPopulatesDepartures` (DepartureBoard flow)
