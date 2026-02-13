@@ -92,4 +92,55 @@ final class NuCoreTests: XCTestCase {
         XCTAssertEqual(service.calculateCatchProbability(departure: departure, walkingMinutes: base + 2), .risky)
         XCTAssertEqual(service.calculateCatchProbability(departure: departure, walkingMinutes: base + 6), .impossible)
     }
+
+    func testJourneyProgressEstimatorInStopWindow() {
+        let now = makeDate("2026-02-13 13:10")
+        let stops: [JourneyStop] = [
+            JourneyStop(id: "A", name: "Alpha", arrTime: nil, arrDate: nil, depTime: "13:00", depDate: "2026-02-13", track: nil),
+            JourneyStop(id: "B", name: "Beta", arrTime: "13:08", arrDate: "2026-02-13", depTime: "13:12", depDate: "2026-02-13", track: nil),
+            JourneyStop(id: "C", name: "Gamma", arrTime: "13:20", arrDate: "2026-02-13", depTime: "13:21", depDate: "2026-02-13", track: nil)
+        ]
+
+        let estimation = JourneyProgressEstimator.infer(
+            stops: stops,
+            fallbackCurrentStopName: "",
+            operationDate: "2026-02-13",
+            now: now
+        )
+
+        XCTAssertEqual(estimation.currentIndex, 1)
+        XCTAssertEqual(estimation.nextIndex, 2)
+        XCTAssertEqual(estimation.currentOrNextIndex, 1)
+        XCTAssertEqual(estimation.minutesToDestination, 10)
+        XCTAssertEqual(estimation.status, .between(from: "Beta", to: "Gamma"))
+    }
+
+    func testJourneyProgressEstimatorAfterDestination() {
+        let now = makeDate("2026-02-13 14:00")
+        let stops: [JourneyStop] = [
+            JourneyStop(id: "A", name: "Alpha", arrTime: nil, arrDate: nil, depTime: "13:00", depDate: "2026-02-13", track: nil),
+            JourneyStop(id: "B", name: "Beta", arrTime: "13:08", arrDate: "2026-02-13", depTime: "13:09", depDate: "2026-02-13", track: nil),
+            JourneyStop(id: "C", name: "Gamma", arrTime: "13:20", arrDate: "2026-02-13", depTime: nil, depDate: nil, track: nil)
+        ]
+
+        let estimation = JourneyProgressEstimator.infer(
+            stops: stops,
+            fallbackCurrentStopName: "",
+            operationDate: "2026-02-13",
+            now: now
+        )
+
+        XCTAssertEqual(estimation.currentIndex, 2)
+        XCTAssertNil(estimation.nextIndex)
+        XCTAssertEqual(estimation.status, .nearDestination)
+        XCTAssertEqual(estimation.minutesToDestination, 0)
+    }
+
+    private func makeDate(_ value: String) -> Date {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "da_DK")
+        formatter.timeZone = TimeZone(identifier: "Europe/Copenhagen")
+        formatter.dateFormat = "yyyy-MM-dd HH:mm"
+        return formatter.date(from: value)!
+    }
 }

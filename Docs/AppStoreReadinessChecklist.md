@@ -18,7 +18,7 @@
 
 | ID | Area | Current Issue | Plan | Status | Evidence |
 |---|---|---|---|---|---|
-| P1-1 | Architecture boundaries | Partial layering exists but Domain/UI/Networking boundaries are mixed in models and VMs | Formalize module boundaries and dependency direction; move pure business logic to Domain | In Progress | Mixed logic in `Nu/Models` + `Nu/ViewModels` (partially covered by new unit tests) |
+| P1-1 | Architecture boundaries | Partial layering exists but Domain/UI/Networking boundaries are mixed in models and VMs | Formalize module boundaries and dependency direction; move pure business logic to Domain | In Progress | Added `Nu/Domain/JourneyProgressEstimator.swift`; JourneyDetail now consumes domain inference |
 | P1-2 | Dependency Injection | `LocationManager` and storage use concrete types/singletons in several places | Introduce protocols for Location, Storage, Clock; inject through initializers | In Progress | Added `LocationManaging`, `KeyValueStoring`, `ClockProtocol`; wired VM/storage usage |
 | P1-3 | Error taxonomy | API/network/decode/data-missing handled, but not consistently mapped to UI states | Unify error mapping and fallback copy for all screens | In Progress | `APIError` + per-VM ad-hoc handling |
 | P1-4 | Accessibility | Many controls already labeled; full pass still missing for map annotations and composite rows | Add/accessibility labels+hints; verify Dynamic Type truncation paths | In Progress | Screens under `Nu/Views/Screens` |
@@ -56,3 +56,5 @@ rg -n "Vi bruger din lokation|defaultAccessID|print\(" Nu
   - `NuCoreTests.testStationGroupingMergesSameBaseNameWithinThreshold`
   - `NuCoreTests.testORServiceHeuristicDistributionUsesRealtimeProfile`
   - `NuCoreTests.testORServiceCatchProbabilityStates`
+  - `NuCoreTests.testJourneyProgressEstimatorInStopWindow`
+  - `NuCoreTests.testJourneyProgressEstimatorAfterDestination`
