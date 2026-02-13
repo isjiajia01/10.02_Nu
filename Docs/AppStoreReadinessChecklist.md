@@ -46,3 +46,8 @@ xcodebuild -project Nu.xcodeproj -scheme Nu -destination 'generic/platform=iOS S
 xcodebuild -project Nu.xcodeproj -scheme Nu -destination 'generic/platform=iOS Simulator' test
 rg -n "Vi bruger din lokation|defaultAccessID|print\(" Nu
 ```
+
+## Validation Results (2026-02-13)
+- `build`: PASS (`** BUILD SUCCEEDED **`)
+- `test`: FAIL (`Scheme Nu is not currently configured for the test action.`)
+- `privacy key check`: PASS (`NSLocationWhenInUseUsageDescription` is English; hardcoded default accessId removed)
