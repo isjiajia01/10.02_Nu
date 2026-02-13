@@ -13,7 +13,7 @@
 xcodebuild -project Nu.xcodeproj -scheme Nu -destination 'generic/platform=iOS Simulator' build
 
 # 2) Test
-xcodebuild -project Nu.xcodeproj -scheme Nu -destination 'platform=iOS Simulator,name=iPhone 16' test
+xcodebuild -project Nu.xcodeproj -scheme Nu -destination 'platform=iOS Simulator,name=iPhone 17' test
 
 # 3) Lint (if installed)
 swiftlint lint

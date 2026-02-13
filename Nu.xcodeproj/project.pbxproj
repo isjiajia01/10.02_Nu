@@ -8,10 +8,25 @@
 
 /* Begin PBXBuildFile section */
 		07212D762F3CA3F700AC4FAB /* airead.json in Resources */ = {isa = PBXBuildFile; fileRef = 07212D752F3CA3EE00AC4FAB /* airead.json */; };
+		08A111E12F50000100A10001 /* NuCoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 08A111D12F50000100A10001 /* NuCoreTests.swift */; };
+		08A111E22F50000100A10001 /* XCTest.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 08A111D22F50000100A10001 /* XCTest.framework */; };
 /* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		08A111C12F50000100A10001 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 073B1FF62F3C6BA800935AB6 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 073B1FFD2F3C6BA800935AB6;
+			remoteInfo = Nu;
+		};
+/* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
 		07212D752F3CA3EE00AC4FAB /* airead.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = airead.json; sourceTree = "<group>"; };
+		08A111D12F50000100A10001 /* NuCoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NuCoreTests.swift; sourceTree = "<group>"; };
+		08A111D22F50000100A10001 /* XCTest.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = XCTest.framework; path = System/Library/Frameworks/XCTest.framework; sourceTree = SDKROOT; };
+		08A111D32F50000100A10001 /* NuTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = NuTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		073B1FFE2F3C6BA800935AB6 /* Nu.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Nu.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -31,6 +46,14 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		08A111B12F50000100A10001 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				08A111E22F50000100A10001 /* XCTest.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -39,14 +62,24 @@
 			children = (
 				07212D752F3CA3EE00AC4FAB /* airead.json */,
 				073B20002F3C6BA800935AB6 /* Nu */,
+				08A111A12F50000100A10001 /* NuTests */,
 				073B1FFF2F3C6BA800935AB6 /* Products */,
 			);
+			sourceTree = "<group>";
+		};
+		08A111A12F50000100A10001 /* NuTests */ = {
+			isa = PBXGroup;
+			children = (
+				08A111D12F50000100A10001 /* NuCoreTests.swift */,
+			);
+			path = NuTests;
 			sourceTree = "<group>";
 		};
 		073B1FFF2F3C6BA800935AB6 /* Products */ = {
 			isa = PBXGroup;
 			children = (
 				073B1FFE2F3C6BA800935AB6 /* Nu.app */,
+				08A111D32F50000100A10001 /* NuTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -75,6 +108,26 @@
 			productName = Nu;
 			productReference = 073B1FFE2F3C6BA800935AB6 /* Nu.app */;
 			productType = "com.apple.product-type.application";
+		};
+		08A111912F50000100A10001 /* NuTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 08A111F12F50000100A10001 /* Build configuration list for PBXNativeTarget "NuTests" */;
+			buildPhases = (
+				08A111C22F50000100A10001 /* Sources */,
+				08A111B12F50000100A10001 /* Frameworks */,
+				08A111B22F50000100A10001 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				08A111C32F50000100A10001 /* PBXTargetDependency */,
+			);
+			name = NuTests;
+			packageProductDependencies = (
+			);
+			productName = NuTests;
+			productReference = 08A111D32F50000100A10001 /* NuTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
 		};
 /* End PBXNativeTarget section */
 
@@ -105,6 +158,7 @@
 			projectRoot = "";
 			targets = (
 				073B1FFD2F3C6BA800935AB6 /* Nu */,
+				08A111912F50000100A10001 /* NuTests */,
 			);
 		};
 /* End PBXProject section */
@@ -118,6 +172,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		08A111B22F50000100A10001 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
@@ -128,7 +189,23 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		08A111C22F50000100A10001 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				08A111E12F50000100A10001 /* NuCoreTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		08A111C32F50000100A10001 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 073B1FFD2F3C6BA800935AB6 /* Nu */;
+			targetProxy = 08A111C12F50000100A10001 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		073B20072F3C6BA900935AB6 /* Debug */ = {
@@ -320,6 +397,55 @@
 			};
 			name = Release;
 		};
+		08A111F22F50000100A10001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 777MCA2PWS;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.2;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@loader_path/Frameworks",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = Jiajia.NuTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Nu.app/Nu";
+				TEST_TARGET_NAME = Nu;
+			};
+			name = Debug;
+		};
+		08A111F32F50000100A10001 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 777MCA2PWS;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.2;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@loader_path/Frameworks",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = Jiajia.NuTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Nu.app/Nu";
+				TEST_TARGET_NAME = Nu;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -337,6 +463,15 @@
 			buildConfigurations = (
 				073B200A2F3C6BA900935AB6 /* Debug */,
 				073B200B2F3C6BA900935AB6 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		08A111F12F50000100A10001 /* Build configuration list for PBXNativeTarget "NuTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				08A111F22F50000100A10001 /* Debug */,
+				08A111F32F50000100A10001 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

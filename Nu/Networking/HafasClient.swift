@@ -187,15 +187,20 @@ final class HafasClient {
         guard var components = URLComponents(url: base, resolvingAgainstBaseURL: false) else {
             return nil
         }
-        var allowed = CharacterSet.urlQueryAllowed
-        allowed.remove(charactersIn: "|")
         components.percentEncodedQueryItems = queryItems.map {
             URLQueryItem(
                 name: $0.name,
-                value: $0.value?.addingPercentEncoding(withAllowedCharacters: allowed)
+                value: Self.encodeQueryValue($0.value)
             )
         }
         return components.url
+    }
+
+    static func encodeQueryValue(_ value: String?) -> String? {
+        guard let value else { return nil }
+        var allowed = CharacterSet.urlQueryAllowed
+        allowed.remove(charactersIn: "|")
+        return value.addingPercentEncoding(withAllowedCharacters: allowed)
     }
 
     private func makeRequests(

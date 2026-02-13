@@ -1,7 +1,7 @@
 PROJECT=Nu.xcodeproj
 SCHEME=Nu
 BUILD_DEST=generic/platform=iOS Simulator
-TEST_DEST=platform=iOS Simulator,name=iPhone 16
+TEST_DEST=platform=iOS Simulator,name=iPhone 17
 
 .PHONY: build test lint format ci
 
