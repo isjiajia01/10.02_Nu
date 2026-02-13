@@ -406,7 +406,7 @@ private final class JourneyDetailPageViewModel: ObservableObject {
                         realtimeTime: realtimeTime
                     )
                 } else {
-                    errorMessage = (error as? LocalizedError)?.errorDescription ?? L10n.tr("journeyDetail.fetchFailed")
+                    errorMessage = AppErrorPresenter.message(for: error, context: .journeyDetail)
                 }
             }
         }

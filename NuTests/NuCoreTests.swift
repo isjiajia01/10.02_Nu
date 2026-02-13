@@ -211,6 +211,25 @@ final class NuCoreTests: XCTestCase {
         XCTAssertEqual(vm.departures.count, 1)
         XCTAssertEqual(vm.state, .success)
     }
+
+    func testAppErrorPresenterOfflineMessage() {
+        let message = AppErrorPresenter.message(
+            for: APIError.network(URLError(.notConnectedToInternet)),
+            context: .stations
+        )
+        XCTAssertEqual(message, L10n.tr("error.offline"))
+    }
+
+    func testAppCacheStoreRespectsMaxAge() {
+        let storage = InMemoryKeyValueStore()
+        let cache = AppCacheStore(store: storage)
+        cache.save(["a", "b"], key: "k")
+
+        XCTAssertNotNil(cache.load([String].self, key: "k", maxAge: 60))
+
+        storage.set(Date().addingTimeInterval(-120).timeIntervalSince1970, forKey: "k_ts")
+        XCTAssertNil(cache.load([String].self, key: "k", maxAge: 60))
+    }
 }
 
 private final class MockLocationManager: LocationManaging {
@@ -262,5 +281,25 @@ private struct MockIntegrationAPIService: APIServiceProtocol {
 
     func fetchJourneyDetail(id: String, date: String?) async throws -> JourneyDetail {
         JourneyDetail(stops: [])
+    }
+}
+
+private final class InMemoryKeyValueStore: KeyValueStoring {
+    private var values: [String: Any] = [:]
+
+    func data(forKey defaultName: String) -> Data? {
+        values[defaultName] as? Data
+    }
+
+    func set(_ value: Any?, forKey defaultName: String) {
+        values[defaultName] = value
+    }
+
+    func double(forKey defaultName: String) -> Double {
+        values[defaultName] as? Double ?? 0
+    }
+
+    func array(forKey defaultName: String) -> [Any]? {
+        values[defaultName] as? [Any]
     }
 }

@@ -34,6 +34,7 @@ final class DepartureBoardViewModel: ObservableObject {
     private let orService = ORService()
     private let manualWalkMinutesKey = "manual_walking_minutes"
     private let departureCacheKey: String
+    private let cacheMaxAge: TimeInterval = 90
 
     enum WalkTimeSource: String {
         case auto
@@ -113,9 +114,9 @@ final class DepartureBoardViewModel: ObservableObject {
             isDataStale = false
             state = departures.isEmpty ? .empty : .success
         } catch {
-            let message = (error as? LocalizedError)?.errorDescription ?? L10n.tr("departures.fetchFailed")
+            let message = AppErrorPresenter.message(for: error, context: .departures)
             if departures.isEmpty {
-                if let cached = AppCacheStore.load([Departure].self, key: departureCacheKey) {
+                if let cached = AppCacheStore.load([Departure].self, key: departureCacheKey, maxAge: cacheMaxAge) {
                     departures = cached.value
                         .map { orService.enrich($0) }
                         .map { orService.enrichDecision(departure: $0, walkingMinutes: simulatedWalkingTime) }

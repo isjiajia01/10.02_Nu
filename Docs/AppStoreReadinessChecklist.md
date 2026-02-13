@@ -18,20 +18,20 @@
 
 | ID | Area | Current Issue | Plan | Status | Evidence |
 |---|---|---|---|---|---|
-| P1-1 | Architecture boundaries | Partial layering exists but Domain/UI/Networking boundaries are mixed in models and VMs | Formalize module boundaries and dependency direction; move pure business logic to Domain | In Progress | Added `Nu/Domain/JourneyProgressEstimator.swift`; JourneyDetail now consumes domain inference |
-| P1-2 | Dependency Injection | `LocationManager` and storage use concrete types/singletons in several places | Introduce protocols for Location, Storage, Clock; inject through initializers | In Progress | Added `LocationManaging`, `KeyValueStoring`, `ClockProtocol`; wired VM/storage usage |
-| P1-3 | Error taxonomy | API/network/decode/data-missing handled, but not consistently mapped to UI states | Unify error mapping and fallback copy for all screens | In Progress | `APIError` + per-VM ad-hoc handling |
-| P1-4 | Accessibility | Many controls already labeled; full pass still missing for map annotations and composite rows | Add/accessibility labels+hints; verify Dynamic Type truncation paths | In Progress | Screens under `Nu/Views/Screens` |
-| P1-5 | Performance evidence | Optimizations implemented, but no Instruments artifacts checked in | Capture before/after CPU + SwiftUI recompute + CoreAnimation evidence | Pending | No profiling docs/screenshots in repo |
-| P1-6 | CI reproducibility | No unified build/test/lint/format command surface in root docs | Add README + scripts/Makefile command set for local and CI | In Progress | Root has no README/CI command docs |
+| P1-1 | Architecture boundaries | Partial layering exists but Domain/UI/Networking boundaries are mixed in models and VMs | Formalize module boundaries and dependency direction; move pure business logic to Domain | Completed | Added `Nu/Domain/JourneyProgressEstimator.swift`; JourneyDetail now consumes domain inference |
+| P1-2 | Dependency Injection | `LocationManager` and storage use concrete types/singletons in several places | Introduce protocols for Location, Storage, Clock; inject through initializers | Completed | Added `LocationManaging`, `KeyValueStoring`, `ClockProtocol`; wired VM/storage usage |
+| P1-3 | Error taxonomy | API/network/decode/data-missing handled, but not consistently mapped to UI states | Unify error mapping and fallback copy for all screens | Completed | Added `Nu/Core/AppErrorPresenter.swift`; Nearby/Departure/Journey/Map now use unified mapping |
+| P1-4 | Accessibility | Many controls already labeled; full pass still missing for map annotations and composite rows | Add/accessibility labels+hints; verify Dynamic Type truncation paths | Completed | Added map button hints and map annotation accessibility labels/hints |
+| P1-5 | Performance evidence | Optimizations implemented, but no Instruments artifacts checked in | Capture before/after CPU + SwiftUI recompute + CoreAnimation evidence | Risk | CLI environment supports build/test profiling checks, but screenshot capture from Instruments UI remains manual |
+| P1-6 | CI reproducibility | No unified build/test/lint/format command surface in root docs | Add README + scripts/Makefile command set for local and CI | Completed | Added `README.md` + `Makefile` with build/test/lint/format commands |
 
 ## P2 (Post-submission hardening)
 
 | ID | Area | Current Issue | Plan | Status |
 |---|---|---|---|---|
-| P2-1 | Persistent cache governance | Cache TTL and data retention are implicit | Add retention policy + cleanup schedule + docs | Pending |
-| P2-2 | Versioning discipline | Marketing/build version exists but no documented increment policy | Document SemVer + build increment release checklist | Pending |
-| P2-3 | ATS and entitlement audit report | No explicit written audit report artifact | Add explicit ATS/entitlement checklist with screenshot evidence | Pending |
+| P2-1 | Persistent cache governance | Cache TTL and data retention are implicit | Add retention policy + cleanup schedule + docs | Completed |
+| P2-2 | Versioning discipline | Marketing/build version exists but no documented increment policy | Document SemVer + build increment release checklist | Completed |
+| P2-3 | ATS and entitlement audit report | No explicit written audit report artifact | Add explicit ATS/entitlement checklist with screenshot evidence | Completed |
 
 ## Work Order
 1. P0-1 / P0-2 / P0-4 (privacy + key handling + log hygiene)
@@ -60,3 +60,8 @@ rg -n "Vi bruger din lokation|defaultAccessID|print\(" Nu
   - `NuCoreTests.testJourneyProgressEstimatorAfterDestination`
   - `NuCoreTests.testNearbyViewModelRefreshBuildsGroupedStations` (Nearby -> grouped station flow)
   - `NuCoreTests.testDepartureBoardViewModelFetchPopulatesDepartures` (DepartureBoard flow)
+  - `NuCoreTests.testAppErrorPresenterOfflineMessage`
+  - `NuCoreTests.testAppCacheStoreRespectsMaxAge`
+- added docs:
+  - `Docs/SecurityAudit.md`
+  - `Docs/ReleaseEngineering.md`

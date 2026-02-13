@@ -38,6 +38,7 @@ final class NearbyStationsViewModel: ObservableObject {
     private let fallbackLongitude = 12.568337
     private let fallbackLatitude = 55.676098
     private let cacheKey = "nearby_stations_cache_v1"
+    private let cacheMaxAge: TimeInterval = 180
 
     init(apiService: APIServiceProtocol, locationManager: LocationManaging) {
         self.apiService = apiService
@@ -155,9 +156,9 @@ final class NearbyStationsViewModel: ObservableObject {
             isDataStale = false
             applyFilter()
         } catch {
-            let message = (error as? LocalizedError)?.errorDescription ?? L10n.tr("stations.fetchFailed")
+            let message = AppErrorPresenter.message(for: error, context: .stations)
             if stations.isEmpty {
-                if let cached = AppCacheStore.load([StationModel].self, key: cacheKey) {
+                if let cached = AppCacheStore.load([StationModel].self, key: cacheKey, maxAge: cacheMaxAge) {
                     stations = cached.value
                     stationGroups = StationGrouping.buildGroups(stations)
                     isDataStale = true

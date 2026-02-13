@@ -25,11 +25,39 @@ struct AppCacheStore {
         return (value, ts)
     }
 
+    func load<T: Decodable>(
+        _ type: T.Type,
+        key: String,
+        maxAge: TimeInterval
+    ) -> (value: T, timestamp: Date)? {
+        guard let loaded = load(type, key: key) else { return nil }
+        let age = Date().timeIntervalSince(loaded.timestamp)
+        guard age <= maxAge else { return nil }
+        return loaded
+    }
+
+    func remove(key: String) {
+        store.set(nil, forKey: key)
+        store.set(nil, forKey: key + "_ts")
+    }
+
     static func save<T: Encodable>(_ value: T, key: String) {
         shared.save(value, key: key)
     }
 
     static func load<T: Decodable>(_ type: T.Type, key: String) -> (value: T, timestamp: Date)? {
         shared.load(type, key: key)
+    }
+
+    static func load<T: Decodable>(
+        _ type: T.Type,
+        key: String,
+        maxAge: TimeInterval
+    ) -> (value: T, timestamp: Date)? {
+        shared.load(type, key: key, maxAge: maxAge)
+    }
+
+    static func remove(key: String) {
+        shared.remove(key: key)
     }
 }

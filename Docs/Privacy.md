@@ -20,6 +20,9 @@
 ## Local Storage
 - Favorites: station references (id/extId/globalId/name/type) in `UserDefaults`.
 - Cache: nearby/departure snapshots in app cache store for resilience.
+  - Nearby cache TTL: 180 seconds
+  - Departure cache TTL: 90 seconds
+  - Expired entries are ignored by read path.
 - No sensitive credentials should be persisted in source-controlled files.
 
 ## Third-party and External Services
@@ -32,5 +35,5 @@
 - Keep ATS-compliant HTTPS-only endpoints unless explicit exception is documented.
 
 ## Open Risks
-- API key currently present in source defaults (planned removal in P0).
-- Full entitlement/ATS audit report not yet attached.
+- No critical privacy blockers identified in current implementation.
+- See `Docs/SecurityAudit.md` for ATS/entitlement audit details.
