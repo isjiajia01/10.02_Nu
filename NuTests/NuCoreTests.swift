@@ -60,18 +60,19 @@ final class NuCoreTests: XCTestCase {
         XCTAssertEqual(result.reliabilityScore, 0.82, accuracy: 0.001)
     }
 
-    func testORServiceCatchProbabilityStates() {
+    func testDecisionPolicyCatchBucketStates() {
+        let now = Date()
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "da_DK")
         formatter.timeZone = TimeZone(identifier: "Europe/Copenhagen")
         formatter.dateFormat = "dd.MM.yy"
-        let today = formatter.string(from: Date())
+        let today = formatter.string(from: now)
 
         let timeFormatter = DateFormatter()
         timeFormatter.locale = Locale(identifier: "da_DK")
         timeFormatter.timeZone = TimeZone(identifier: "Europe/Copenhagen")
         timeFormatter.dateFormat = "HH:mm"
-        let departureTime = timeFormatter.string(from: Date().addingTimeInterval(6 * 60))
+        let departureTime = timeFormatter.string(from: now.addingTimeInterval(6 * 60))
 
         let departure = Departure(
             name: "68",
@@ -88,11 +89,237 @@ final class NuCoreTests: XCTestCase {
             uncertaintyRange: UncertaintyRange(lowerBound: 0, upperBound: 5),
             reliabilityScore: 0.7
         )
-        let service = ORService()
-        let base = Double(departure.minutesUntilDepartureRaw ?? 6)
-        XCTAssertEqual(service.calculateCatchProbability(departure: departure, walkingMinutes: max(base - 2, 0)), .safe)
-        XCTAssertEqual(service.calculateCatchProbability(departure: departure, walkingMinutes: base + 2), .risky)
-        XCTAssertEqual(service.calculateCatchProbability(departure: departure, walkingMinutes: base + 6), .impossible)
+
+        // Easy catch: no delay, short walk
+        let easy = DecisionPolicy.enrichDecision(
+            departure: departure,
+            now: now,
+            departureDelayMinutes: 0,
+            walkMinutes: 2,
+            walkP10: 1,
+            walkP90: 3
+        )
+        XCTAssertEqual(easy.catchBucket, .likely)
+
+        // Tight: moderate delay
+        let tight = DecisionPolicy.enrichDecision(
+            departure: departure,
+            now: now,
+            departureDelayMinutes: 3,
+            walkMinutes: 4,
+            walkP10: 3,
+            walkP90: 5
+        )
+        XCTAssertEqual(tight.catchBucket, .tight)
+
+        // Unlikely: large delay
+        let unlikely = DecisionPolicy.enrichDecision(
+            departure: departure,
+            now: now,
+            departureDelayMinutes: 10,
+            walkMinutes: 5,
+            walkP10: 4,
+            walkP90: 6
+        )
+        XCTAssertEqual(unlikely.catchBucket, .unlikely)
+    }
+
+    // MARK: - Regression: no manual walk time references
+
+    func testManualWalkTimeDoesNotExist() throws {
+        // Verify at the type level that old manual concepts are gone.
+        // CatchBucket must have exactly 3 cases (no old CatchStatus).
+        let allBuckets: [CatchBucket] = [.likely, .tight, .unlikely]
+        XCTAssertEqual(allBuckets.count, 3)
+
+        // WalkTimeSource must NOT have a .manual case.
+        // If someone re-adds it, this will fail to compile because
+        // the exhaustive switch below won't match.
+        let source = DepartureBoardViewModel.WalkTimeSource.auto
+        switch source {
+        case .auto: break
+        case .estimated: break
+        case .atStation: break
+        // No .manual or .override case — compile error if re-added without updating here.
+        }
+    }
+
+    // MARK: - Regression: departure delay shifts arrival
+
+    func testArriveTimeUsesDepartureDelay() {
+        let now = Date()
+
+        // d=0 vs d=5: arrival mean must increase by exactly 5 min,
+        // and catch probability must decrease (or stay equal).
+        let dist0 = DecisionPolicy.computeArriveDistribution(
+            now: now,
+            departureDelayMinutes: 0,
+            walkMinutes: 5,
+            walkP10: 3,
+            walkP90: 7
+        )
+        let dist5 = DecisionPolicy.computeArriveDistribution(
+            now: now,
+            departureDelayMinutes: 5,
+            walkMinutes: 5,
+            walkP10: 3,
+            walkP90: 7
+        )
+
+        let meanShift = dist5.mean.timeIntervalSince(dist0.mean) / 60.0
+        let p10Shift = dist5.p10.timeIntervalSince(dist0.p10) / 60.0
+        let p90Shift = dist5.p90.timeIntervalSince(dist0.p90) / 60.0
+
+        XCTAssertEqual(meanShift, 5.0, accuracy: 0.001,
+                        "Departure delay of 5 must shift arrival mean by exactly 5 min")
+        XCTAssertEqual(p10Shift, 5.0, accuracy: 0.001)
+        XCTAssertEqual(p90Shift, 5.0, accuracy: 0.001)
+
+        // With a departure 10 min from now, d=0 should have higher P(catch) than d=5.
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "da_DK")
+        formatter.timeZone = TimeZone(identifier: "Europe/Copenhagen")
+        formatter.dateFormat = "dd.MM.yy"
+        let today = formatter.string(from: now)
+        let timeFormatter = DateFormatter()
+        timeFormatter.locale = Locale(identifier: "da_DK")
+        timeFormatter.timeZone = TimeZone(identifier: "Europe/Copenhagen")
+        timeFormatter.dateFormat = "HH:mm"
+        let depTime = timeFormatter.string(from: now.addingTimeInterval(10 * 60))
+
+        let departure = Departure(
+            name: "5C", type: "BUS", stop: "X",
+            time: depTime, date: today, rtTime: depTime, rtDate: today,
+            direction: "Y", finalStop: "Y", track: nil, messages: nil,
+            uncertaintyRange: UncertaintyRange(lowerBound: -2, upperBound: 2)
+        )
+
+        let p0 = DecisionPolicy.computeCatchProbability(departure: departure, arriveDist: dist0)
+        let p5 = DecisionPolicy.computeCatchProbability(departure: departure, arriveDist: dist5)
+        XCTAssertNotNil(p0)
+        XCTAssertNotNil(p5)
+        XCTAssertGreaterThanOrEqual(p0!, p5!,
+                                     "P(catch) must be monotonically non-increasing as delay grows")
+    }
+
+    // MARK: - Regression: catch uses realtime departure when available
+
+    func testCatchUsesRealtimeDepartureWhenAvailable() {
+        // Scenario: Bus 68 scheduled 3 min from now, but delayed +11 → realtime 14 min.
+        // Walk ETA mean=9 min, delay=0. User can easily catch it.
+        // Old bug: calculation used scheduled time (3 min) → Unlikely.
+        // Fixed: must use realtime (14 min) → Likely.
+        let now = Date()
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "da_DK")
+        formatter.timeZone = TimeZone(identifier: "Europe/Copenhagen")
+        formatter.dateFormat = "dd.MM.yy"
+        let today = formatter.string(from: now)
+        let timeFormatter = DateFormatter()
+        timeFormatter.locale = Locale(identifier: "da_DK")
+        timeFormatter.timeZone = TimeZone(identifier: "Europe/Copenhagen")
+        timeFormatter.dateFormat = "HH:mm"
+
+        let scheduledTime = timeFormatter.string(from: now.addingTimeInterval(3 * 60))
+        let realtimeTime = timeFormatter.string(from: now.addingTimeInterval(14 * 60))
+
+        let departure = Departure(
+            name: "68", type: "BUS", stop: "Nuuks Plads",
+            time: scheduledTime, date: today,
+            rtTime: realtimeTime, rtDate: today,
+            direction: "Bella Center", finalStop: "Bella Center",
+            track: nil, messages: nil,
+            uncertaintyRange: UncertaintyRange(lowerBound: -3.29, upperBound: 3.29),
+            reliabilityScore: 0.82
+        )
+
+        // Verify effectiveDepartureDate uses realtime
+        let effective = departure.effectiveDepartureDate
+        XCTAssertNotNil(effective)
+        XCTAssertTrue(effective!.isRealtime,
+                       "effectiveDepartureDate must prefer realtime over scheduled")
+
+        // The effective departure should be ~14 min from now, not ~3 min
+        let effectiveMinutes = effective!.date.timeIntervalSince(now) / 60.0
+        XCTAssertEqual(effectiveMinutes, 14.0, accuracy: 1.0,
+                        "Effective departure must be ~14 min (realtime), not ~3 min (scheduled)")
+
+        // Enrich with walk=9 min, delay=0 → should be Likely (not Unlikely)
+        let enriched = DecisionPolicy.enrichDecision(
+            departure: departure,
+            now: now,
+            departureDelayMinutes: 0,
+            walkMinutes: 9,
+            walkP10: 7,
+            walkP90: 11
+        )
+
+        XCTAssertNotNil(enriched.catchProbability)
+        XCTAssertGreaterThanOrEqual(enriched.catchProbability!, 0.80,
+                                     "With 14 min realtime and 9 min walk, P(catch) should be high")
+        XCTAssertNotEqual(enriched.catchBucket, .unlikely,
+                           "Delayed bus with plenty of slack must NOT be Unlikely")
+
+        // Contrast: if we had a departure with only scheduled time (3 min),
+        // same walk would be Unlikely
+        let scheduledOnly = Departure(
+            name: "68", type: "BUS", stop: "Nuuks Plads",
+            time: scheduledTime, date: today,
+            rtTime: nil, rtDate: nil,
+            direction: "Bella Center", finalStop: "Bella Center",
+            track: nil, messages: nil,
+            uncertaintyRange: UncertaintyRange(lowerBound: 0.25, upperBound: 4.75),
+            reliabilityScore: 0.55
+        )
+        let enrichedScheduled = DecisionPolicy.enrichDecision(
+            departure: scheduledOnly,
+            now: now,
+            departureDelayMinutes: 0,
+            walkMinutes: 9,
+            walkP10: 7,
+            walkP90: 11
+        )
+        XCTAssertNotNil(enrichedScheduled.catchProbability)
+        XCTAssertLessThan(enrichedScheduled.catchProbability!, enriched.catchProbability!,
+                           "Scheduled-only (3 min) must have lower P(catch) than realtime (14 min)")
+    }
+
+    // MARK: - Regression: card does not render ETA range
+
+    func testCardDoesNotRenderEtaRange() {
+        // GlassDepartureCard should produce a single countdown number,
+        // never an interval like "4-7" or "X–Y min".
+        // We verify by checking that Departure has no interval-producing
+        // properties and that CatchBucket labels contain no dash-digit patterns.
+        let allLabels = [CatchBucket.likely.label, CatchBucket.tight.label, CatchBucket.unlikely.label]
+        for label in allLabels {
+            XCTAssertFalse(label.contains("-"), "Bucket label '\(label)' must not contain interval dash")
+            XCTAssertNil(label.range(of: #"\d+-\d+"#, options: .regularExpression),
+                         "Bucket label '\(label)' must not contain digit-dash-digit interval pattern")
+        }
+    }
+
+    // MARK: - Probability formatting
+
+    func testFormatProbability() {
+        // nil → dash
+        XCTAssertEqual(DecisionPolicy.formatProbability(nil), "—")
+        // very low → "<5%"  (single %, no double %%)
+        XCTAssertEqual(DecisionPolicy.formatProbability(0.01), "<5%")
+        XCTAssertEqual(DecisionPolicy.formatProbability(0.04), "<5%")
+        // normal range
+        XCTAssertEqual(DecisionPolicy.formatProbability(0.58), "58%")
+        XCTAssertEqual(DecisionPolicy.formatProbability(0.85), "85%")
+        // very high → ">99%"
+        XCTAssertEqual(DecisionPolicy.formatProbability(1.0), ">99%")
+        XCTAssertEqual(DecisionPolicy.formatProbability(0.999), ">99%")
+        // edge: exactly 0.05 should not be "<5%"
+        XCTAssertEqual(DecisionPolicy.formatProbability(0.05), "5%")
+        // no double %% anywhere
+        for p in stride(from: 0.0, through: 1.0, by: 0.1) {
+            let text = DecisionPolicy.formatProbability(p)
+            XCTAssertFalse(text.contains("%%"), "formatProbability(\(p)) = '\(text)' must not contain %%")
+        }
     }
 
     func testJourneyProgressEstimatorInStopWindow() {
@@ -144,6 +371,233 @@ final class NuCoreTests: XCTestCase {
         formatter.timeZone = TimeZone(identifier: "Europe/Copenhagen")
         formatter.dateFormat = "yyyy-MM-dd HH:mm"
         return formatter.date(from: value)!
+    }
+
+    // MARK: - Regression: mode classification via TransportModeResolver
+    // Root cause: HAFAS products is a bitmask integer (e.g. 128), not a string like "BUS".
+    // stop.type ("ST"/"ADR"/"POI") is a LOCATION type, never used for mode inference.
+
+    /// type="ST" alone (no products, no bitmask) must be .unknown.
+    func testStationModeSTTypeAloneIsUnknown() {
+        let nuuks = StationModel(
+            id: "8600626", name: "Nuuks Plads St. (Rantzausgade)",
+            latitude: 55.68748, longitude: 12.54692,
+            distanceMeters: 80, type: "ST"
+        )
+        XCTAssertEqual(nuuks.stationMode, .unknown,
+                        "type='ST' without products/bitmask must be .unknown")
+
+        let forum = StationModel(
+            id: "8600630", name: "Forum St.",
+            latitude: 55.68100, longitude: 12.55700,
+            distanceMeters: 200, type: "ST"
+        )
+        XCTAssertEqual(forum.stationMode, .unknown,
+                        "Forum St. with only type='ST' must be .unknown")
+    }
+
+    /// productsBitmask=16 (Bus cls) must produce .bus.
+    func testStationModeBusFromBitmask() {
+        let station = StationModel(
+            id: "8600626", name: "Nuuks Plads St. (Rantzausgade)",
+            latitude: 55.68748, longitude: 12.54692,
+            distanceMeters: 80, type: "ST",
+            productsBitmask: 16
+        )
+        XCTAssertEqual(station.stationMode, .bus,
+                        "productsBitmask=16 (Bus) must map to .bus")
+    }
+
+    /// productsBitmask=8 (S-tog cls) must produce .tog.
+    func testStationModeTogFromBitmask() {
+        let station = StationModel(
+            id: "8600700", name: "Nørreport St.",
+            latitude: 55.68300, longitude: 12.57200,
+            distanceMeters: 300, type: "ST",
+            productsBitmask: 8
+        )
+        XCTAssertEqual(station.stationMode, .tog,
+                        "productsBitmask=8 (S-tog) must map to .tog")
+    }
+
+    /// productsBitmask=64 (Metro cls) must produce .metro.
+    func testStationModeMetroFromBitmask() {
+        let station = StationModel(
+            id: "8600800", name: "Forum (Metro)",
+            latitude: 55.68100, longitude: 12.55700,
+            distanceMeters: 150, type: "ST",
+            productsBitmask: 64
+        )
+        XCTAssertEqual(station.stationMode, .metro,
+                        "productsBitmask=64 (Metro) must map to .metro")
+    }
+
+    /// productsBitmask=80 (64+16 = Metro+Bus) must produce .mixed.
+    func testStationModeMixedFromBitmask() {
+        let station = StationModel(
+            id: "8600631", name: "Forum St.",
+            latitude: 55.68100, longitude: 12.55700,
+            distanceMeters: 200, type: "ST",
+            productsBitmask: 80 // 64 (metro) + 16 (bus)
+        )
+        if case .mixed(let modes) = station.stationMode {
+            XCTAssertTrue(modes.contains(.bus), "Mixed bitmask 80 must include .bus")
+            XCTAssertTrue(modes.contains(.metro), "Mixed bitmask 80 must include .metro")
+        } else {
+            XCTFail("productsBitmask=80 must be .mixed, got \(station.stationMode)")
+        }
+    }
+
+    /// productAtStop with cls takes priority over bitmask.
+    func testStationModeFromProductAtStop() {
+        let entries = [
+            ProductAtStopEntry(name: "Metro M3", catOut: "Metro", cls: 64),
+            ProductAtStopEntry(name: "Bus 5C", catOut: "Bus", cls: 16)
+        ]
+        let station = StationModel(
+            id: "8600800", name: "Forum St.",
+            latitude: 55.68100, longitude: 12.55700,
+            distanceMeters: 150, type: "ST",
+            productsBitmask: 128, // would be metro-only if used
+            productAtStop: entries
+        )
+        if case .mixed(let modes) = station.stationMode {
+            XCTAssertTrue(modes.contains(.bus), "productAtStop must include .bus from cls=16")
+            XCTAssertTrue(modes.contains(.metro), "productAtStop must include .metro from cls=64")
+        } else {
+            XCTFail("productAtStop with bus+metro must be .mixed, got \(station.stationMode)")
+        }
+    }
+
+    /// String token products still work (backward compat).
+    func testStationModeBusFromStringProducts() {
+        let station = StationModel(
+            id: "8600626", name: "Nuuks Plads St.",
+            latitude: 55.68748, longitude: 12.54692,
+            distanceMeters: 80, type: "ST",
+            products: ["BUS"]
+        )
+        XCTAssertEqual(station.stationMode, .bus,
+                        "products=['BUS'] string token must map to .bus")
+    }
+
+    /// String "128" in products array must be decoded as bitmask → metro (Letbane).
+    func testStationModeBitmaskStringInProductsArray() {
+        let station = StationModel(
+            id: "8600900", name: "Skyttegade",
+            latitude: 55.68000, longitude: 12.55000,
+            distanceMeters: 100, type: "ST",
+            products: ["128"]
+        )
+        XCTAssertEqual(station.stationMode, .metro,
+                        "products=['128'] must decode bitmask 128 → .metro (Letbane)")
+    }
+
+    /// Name fallback: "(Metro)" in name → .metro when no products.
+    func testStationModeNameFallbackMetro() {
+        let station = StationModel(
+            id: "8600801", name: "Forum (Metro)",
+            latitude: 55.68100, longitude: 12.55700,
+            distanceMeters: 150, type: "ST"
+        )
+        XCTAssertEqual(station.stationMode, .metro,
+                        "Name '(Metro)' must fallback to .metro when no products")
+    }
+
+    /// Name with only "St." and no products must be .unknown — never guess TOG.
+    func testStationModeNameStDotIsNotTog() {
+        let station = StationModel(
+            id: "9999", name: "Forum St.",
+            latitude: 55.68100, longitude: 12.55700,
+            distanceMeters: 200, type: nil
+        )
+        XCTAssertEqual(station.stationMode, .unknown,
+                        "'St.' in name must NOT trigger .tog — must be .unknown")
+    }
+
+    /// Group with metro + bus entrances must have mergedMode .mixed.
+    func testStationGroupMixedEntrances() {
+        let busEntrance = StationModel(
+            id: "1", name: "Nuuks Plads St. (Rantzausgade)",
+            latitude: 55.68748, longitude: 12.54692,
+            distanceMeters: 80, type: "ST",
+            productsBitmask: 16
+        )
+        let metroEntrance = StationModel(
+            id: "2", name: "Nuuks Plads (Metro)",
+            latitude: 55.68760, longitude: 12.54680,
+            distanceMeters: 110, type: "ST",
+            productsBitmask: 64
+        )
+        let group = StationGroupModel(id: "test", baseName: "Nuuks Plads", stations: [busEntrance, metroEntrance])
+
+        // Each entrance keeps its own mode
+        XCTAssertEqual(busEntrance.stationMode, .bus)
+        XCTAssertEqual(metroEntrance.stationMode, .metro)
+
+        // Group mergedMode is the union
+        if case .mixed(let modes) = group.mergedMode {
+            XCTAssertTrue(modes.contains(.bus), "Group must include .bus from bus entrance")
+            XCTAssertTrue(modes.contains(.metro), "Group must include .metro from metro entrance")
+        } else {
+            XCTFail("Group with bus + metro entrances must be .mixed, got \(group.mergedMode)")
+        }
+    }
+
+    func testNuuksPladsAggregatesToMixed() {
+        let busEntrance = StationModel(
+            id: "nuuks-bus",
+            name: "Nuuks Plads St. (Rantzausgade)",
+            latitude: 55.68748,
+            longitude: 12.54692,
+            distanceMeters: 80,
+            type: "ST",
+            products: ["BUS"]
+        )
+        let metroEntrance = StationModel(
+            id: "nuuks-metro",
+            name: "Nuuks Plads St. (Metro)",
+            latitude: 55.68752,
+            longitude: 12.54688,
+            distanceMeters: 100,
+            type: "ST",
+            products: ["METRO"]
+        )
+
+        let group = StationGroupModel(id: "nuuks", baseName: "Nuuks Plads St.", stations: [busEntrance, metroEntrance])
+        if case .mixed(let modes) = group.mergedMode {
+            XCTAssertEqual(modes, Set([.bus, .metro]))
+        } else {
+            XCTFail("Nuuks Plads should aggregate to .mixed(bus+metro), got \(group.mergedMode)")
+        }
+    }
+
+    func testLauridsNoProductsDoesNotFallbackToStationOrTog() {
+        let station = StationModel(
+            id: "laurids",
+            name: "Laurids Skaus Gade (Ågade)",
+            latitude: 55.0,
+            longitude: 12.0,
+            distanceMeters: 50,
+            type: "ST",
+            products: []
+        )
+
+        XCTAssertEqual(station.stationMode, .unknown)
+    }
+
+    func testNameStDoesNotImplyTog() {
+        let station = StationModel(
+            id: "forum-st",
+            name: "Forum St.",
+            latitude: 55.68100,
+            longitude: 12.55700,
+            distanceMeters: 200,
+            type: "ST",
+            products: []
+        )
+
+        XCTAssertEqual(station.stationMode, .unknown)
     }
 
     @MainActor

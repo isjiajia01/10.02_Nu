@@ -17,6 +17,7 @@
 "mode.metro" = "METRO";
 "mode.tog" = "TOG";
 "mode.mixed" = "MIXED(%@)";
+"mode.unknown" = "UNKNOWN";
 
 "station.zone" = "Zone %@";
 "station.distance.meters" = "%d m";
@@ -57,15 +58,25 @@
 "departures.favorite.accessibility" = "Favorite station";
 "departures.walking.label" = "Walking time to station";
 "departures.walking.minutesInterval" = "%d min (%@)";
+"departures.walking.minutes.auto.interval" = "%d min (%d-%d)";
+"departures.walking.minutes.auto.single" = "%d min";
+"departures.walking.minutes.estimated" = "~%d min (est.)";
 "departures.walking.preset.inStation" = "I'm at the station";
 "departures.walking.preset.onTheWay" = "I'm on the way";
-"departures.walking.manual" = "Manual (minutes)";
+"departures.walking.delay.label" = "Leave in";
+"departures.walking.delay.minutes" = "Leave in %d min";
+"departures.walking.delay.slider" = "Departure delay (minutes)";
+"departures.walking.delay.preset.0" = "Now";
+"departures.walking.delay.preset.5" = "5 min";
+"departures.walking.delay.preset.10" = "10 min";
 "departures.walking.accessibility.value" = "%d minutes";
-"departures.walking.accessibility.hint" = "Swipe left or right to adjust walking time and update catch suggestions.";
+"departures.walking.accessibility.hint" = "Swipe left or right to adjust departure delay and update catch suggestions.";
 "departures.walking.locationUnavailable" = "Location is unavailable. Using conservative walking estimate.";
+"departures.walking.mode.live" = "Live updates";
 "departures.walking.source.auto" = "Auto";
+"departures.walking.source.estimated" = "Estimated";
 "departures.walking.source.pace" = "Pace-based";
-"departures.walking.source.manual" = "Manual";
+"departures.walking.source.atStation" = "At station";
 "departures.walking.source.preset" = "Preset";
 "departures.walking.source.fallback" = "Conservative";
 "departures.reliability.legend.label" = "Reliability legend";
@@ -76,12 +87,8 @@
 "departures.interval.departed" = "Departed";
 "departures.track" = "Platform %@";
 "departures.track.changed" = "Platform change %@→%@";
-"departures.card.accessibility.hint" = "Estimated departure window is %@ minutes. Double-tap for trip details.";
+"departures.card.accessibility.hint" = "Departs in %@ minutes. Double-tap for trip details.";
 "departures.delay.minutes" = "+%d min";
-"departures.catch.conservative" = "Conservative estimate";
-"departures.catch.insufficient" = "Insufficient data";
-"departures.catch.lt5" = "Catch probability: <5%%";
-"departures.catch.percent" = "Catch probability: %d%%";
 "departures.accessibility.summary" = "%@ toward %@, %@";
 "departures.accessibility.inMinutes" = "Departs in %d minutes";
 "departures.accessibility.timePending" = "Time pending";
@@ -90,6 +97,7 @@
 
 "map.title" = "Map";
 "map.loading" = "Loading stations...";
+"map.locating" = "Locating...";
 "map.loadFailed.title" = "Map failed to load";
 "map.loadFailed.description" = "Unable to load map stations. Please try again.";
 "map.permissionDenied.title" = "Location permission is off";
@@ -122,6 +130,11 @@
 "journeyDetail.role.destination" = "Destination";
 "journeyDetail.position.realtime" = "Estimated from realtime";
 "journeyDetail.position.scheduled" = "Estimated from schedule";
+"journeyDetail.estimated.rt" = "Estimated (RT)";
+"journeyDetail.estimated.sched" = "Estimated (Sched)";
+"journeyDetail.estimated.source.realtime" = "realtime";
+"journeyDetail.estimated.source.scheduled" = "schedule";
+"journeyDetail.estimated.segment.a11y" = "Vehicle estimated between %@ and %@, estimated from %@.";
 "journeyDetail.destination.minutes" = "~%d min to destination";
 "journeyDetail.destination.pending" = "Destination ETA pending";
 "journeyDetail.zone.hidden" = "Hidden %d zone nodes";
@@ -138,9 +151,10 @@
 "journeyDetail.status.nearDestination" = "Vehicle is close to destination";
 "journeyDetail.status.unknown" = "Vehicle position is currently unknown";
 
-"catch.safe" = "Walk";
-"catch.risky" = "Run";
-"catch.impossible" = "Wait";
+"catch.likely" = "Likely";
+"catch.tight" = "Tight";
+"catch.unlikely" = "Unlikely";
+"catch.lowConfidence" = "Low confidence";
 
 "reliability.high" = "High";
 "reliability.medium" = "Medium";

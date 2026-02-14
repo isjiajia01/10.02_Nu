@@ -5,7 +5,8 @@ import CoreLocation
 ///
 /// 说明：
 /// - 字段设计保持轻量，优先满足附近站点列表和距离排序需求。
-/// - `type` 用于 UI 快速区分 BUS / TOG / METRO。
+/// - `type` 是 HAFAS 地点类型（"ST"/"ADR"/"POI"），不用于交通模式推断。
+/// - 交通模式来自 `productsBitmask` / `productAtStop` / `products` token。
 struct StationModel: Codable, Identifiable, Hashable {
     let id: String
     let extId: String?
@@ -16,6 +17,8 @@ struct StationModel: Codable, Identifiable, Hashable {
     let distanceMeters: Double?
     let type: String?
     let products: [String]?
+    let productsBitmask: Int?
+    let productAtStop: [ProductAtStopEntry]?
     let category: String?
     let zone: String?
     let stationGroupId: String?
@@ -37,6 +40,8 @@ struct StationModel: Codable, Identifiable, Hashable {
         case type
         case product
         case products
+        case productsBitmask
+        case productAtStop
         case category
         case cat
         case zone
@@ -56,6 +61,8 @@ struct StationModel: Codable, Identifiable, Hashable {
         distanceMeters: Double?,
         type: String?,
         products: [String]? = nil,
+        productsBitmask: Int? = nil,
+        productAtStop: [ProductAtStopEntry]? = nil,
         category: String? = nil,
         zone: String? = nil,
         stationGroupId: String? = nil
@@ -69,6 +76,8 @@ struct StationModel: Codable, Identifiable, Hashable {
         self.distanceMeters = distanceMeters
         self.type = type
         self.products = products
+        self.productsBitmask = productsBitmask
+        self.productAtStop = productAtStop
         self.category = category
         self.zone = zone
         self.stationGroupId = stationGroupId
@@ -102,7 +111,15 @@ struct StationModel: Codable, Identifiable, Hashable {
         distanceMeters = Self.decodeFlexibleDouble(container: container, keys: [.distanceMeters, .distance, .dist])
         type = (try? container.decode(String.self, forKey: .type))
             ?? (try? container.decode(String.self, forKey: .product))
-        products = Self.decodeProducts(container: container)
+
+        // products: 尝试解码为 bitmask Int、String token 数组、或单个 product 字符串
+        let (decodedProducts, decodedBitmask) = Self.decodeProductsAndBitmask(container: container)
+        products = decodedProducts
+        productsBitmask = decodedBitmask
+
+        // productAtStop: 数组或单对象
+        productAtStop = Self.decodeProductAtStop(container: container)
+
         category = (try? container.decode(String.self, forKey: .category))
             ?? (try? container.decode(String.self, forKey: .cat))
         zone = try? container.decode(String.self, forKey: .zone)
@@ -124,6 +141,8 @@ struct StationModel: Codable, Identifiable, Hashable {
         try container.encodeIfPresent(distanceMeters, forKey: .distanceMeters)
         try container.encodeIfPresent(type, forKey: .type)
         try container.encodeIfPresent(products, forKey: .products)
+        try container.encodeIfPresent(productsBitmask, forKey: .productsBitmask)
+        try container.encodeIfPresent(productAtStop, forKey: .productAtStop)
         try container.encodeIfPresent(category, forKey: .category)
         try container.encodeIfPresent(zone, forKey: .zone)
         try container.encodeIfPresent(stationGroupId, forKey: .parent)
@@ -168,28 +187,83 @@ struct StationModel: Codable, Identifiable, Hashable {
         return abs(value) > limit ? (value / 1_000_000.0) : value
     }
 
-    private static func decodeProducts(
+    /// 解码 products 字段：同时提取字符串 token 和 bitmask 整数。
+    ///
+    /// HAFAS 返回格式多样：
+    /// - `"products": 128`（整数 bitmask）
+    /// - `"products": "128"`（字符串形式的 bitmask）
+    /// - `"products": "BUS,Metro"`（逗号分隔的 token）
+    /// - `"products": ["BUS","Metro"]`（数组）
+    /// - `"product": "BUS"`（单个 product 字段）
+    private static func decodeProductsAndBitmask(
         container: KeyedDecodingContainer<CodingKeys>
-    ) -> [String]? {
-        if let list = try? container.decode([String].self, forKey: .products) {
-            return list
+    ) -> (products: [String]?, bitmask: Int?) {
+        // 1) 尝试直接解码为 Int（纯 bitmask）
+        if let intValue = try? container.decode(Int.self, forKey: .products) {
+            return (nil, intValue)
         }
+
+        // 2) 尝试解码为 [String]
+        if let list = try? container.decode([String].self, forKey: .products) {
+            return (list, nil)
+        }
+
+        // 3) 尝试解码为 String
         if let raw = try? container.decode(String.self, forKey: .products) {
+            // 如果是纯数字 → bitmask
+            if let intValue = Int(raw.trimmingCharacters(in: .whitespaces)) {
+                return (nil, intValue)
+            }
+            // 否则按分隔符拆分为 token
             let tokens = raw
                 .split { $0 == "," || $0 == "|" || $0 == ";" }
                 .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
                 .filter { !$0.isEmpty }
-            if !tokens.isEmpty { return tokens }
+            if !tokens.isEmpty { return (tokens, nil) }
         }
+
+        // 4) 尝试 product（单数）字段
         if let raw = try? container.decode(String.self, forKey: .product) {
-            return [raw]
+            if let intValue = Int(raw.trimmingCharacters(in: .whitespaces)) {
+                return (nil, intValue)
+            }
+            return ([raw], nil)
+        }
+
+        // 5) 尝试从缓存字段 productsBitmask 读取（我们自己 encode 的）
+        if let cached = try? container.decode(Int.self, forKey: .productsBitmask) {
+            return (nil, cached)
+        }
+
+        return (nil, nil)
+    }
+
+    /// 解码 productAtStop 字段（数组或单对象）。
+    private static func decodeProductAtStop(
+        container: KeyedDecodingContainer<CodingKeys>
+    ) -> [ProductAtStopEntry]? {
+        if let list = try? container.decode([ProductAtStopEntry].self, forKey: .productAtStop) {
+            return list.isEmpty ? nil : list
+        }
+        if let single = try? container.decode(ProductAtStopEntry.self, forKey: .productAtStop) {
+            return [single]
         }
         return nil
     }
 }
 
 extension StationModel: StationTypeStylable {
-    var stationType: String? { type }
+    /// 从 stationMode 派生，确保与 StationModeVisualStyle 一致。
+    /// 不再直接使用 raw type 字段（"ST"/"ADR" 等不是交通方式）。
+    var stationType: String? {
+        switch stationMode {
+        case .bus: return "BUS"
+        case .metro: return "METRO"
+        case .tog: return "TOG"
+        case .mixed: return "METRO" // mixed 场景用最高优先级 mode 做图标
+        case .unknown: return nil
+        }
+    }
 }
 
 /// 地图坐标扩展。
@@ -200,6 +274,24 @@ extension StationModel: StationTypeStylable {
 /// - 当前 `StationModel` 使用 `Double`，这里做一个兼容归一化：
 ///   如果数值超出正常经纬范围，则自动按微度缩放。
 extension StationModel {
+    struct ModeResolution: Hashable {
+        let modes: Set<StationMode.SingleMode>
+        let source: String
+
+        var reason: String {
+            switch source {
+            case "productAtStop", "bitmask", "stringTokens":
+                return "apiProducts"
+            case "typeMapping":
+                return "typeMapping"
+            case "nameFallback":
+                return "nameFallback"
+            default:
+                return "unknown"
+            }
+        }
+    }
+
     enum StationMode: Hashable {
         case bus
         case metro
@@ -221,7 +313,7 @@ extension StationModel {
             case .mixed(let set):
                 let text = set.map(\.rawValue).sorted().joined(separator: "·")
                 return L10n.tr("mode.mixed", text)
-            case .unknown: return L10n.tr("mode.bus")
+            case .unknown: return L10n.tr("mode.unknown")
             }
         }
 
@@ -231,35 +323,40 @@ extension StationModel {
             case .metro: return L10n.tr("mode.metro")
             case .tog: return L10n.tr("mode.tog")
             case .mixed(let set): return set.map(\.rawValue).sorted().joined(separator: " · ")
-            case .unknown: return L10n.tr("mode.bus")
+            case .unknown: return L10n.tr("mode.unknown")
             }
         }
     }
 
+    var modeResolution: ModeResolution {
+        // 构建 category token（不含 type，type 是地点类型）
+        var tokens: [String] = []
+        if let category { tokens.append(category) }
+        if let products, !products.isEmpty { tokens.append(contentsOf: products) }
+
+        let (resolved, source) = TransportModeResolver.resolve(
+            productAtStop: productAtStop,
+            productsBitmask: productsBitmask,
+            productTokens: tokens.isEmpty ? nil : tokens,
+            stationName: name,
+            stopId: id,
+            stopType: type
+        )
+        return ModeResolution(modes: resolved, source: source)
+    }
+
     var stationMode: StationMode {
-        let apiModes = detectedModesFromAPI()
-        if apiModes.count >= 2 {
-            return .mixed(apiModes)
-        }
-        if let single = apiModes.first {
+        let resolved = modeResolution.modes
+
+        if resolved.count >= 2 { return .mixed(resolved) }
+        if let single = resolved.first {
             switch single {
             case .bus: return .bus
             case .metro: return .metro
             case .tog: return .tog
             }
         }
-
-        let lower = name.lowercased()
-        if lower.contains("(metro)") {
-            return .metro
-        }
-        if lower.contains("stop") || lower.contains("stoppested") {
-            return .bus
-        }
-        if lower.contains(" st.") || lower.contains(" station") || lower.contains(" tog") || lower.hasSuffix(" h") {
-            return .tog
-        }
-        return .bus
+        return .unknown
     }
 
     var stationModeSubtitle: String {
@@ -301,26 +398,6 @@ extension StationModel {
         case .mixed(let set): return "MIXED:\(set.map(\.rawValue).sorted().joined(separator: "|"))"
         case .unknown: return "UNKNOWN"
         }
-    }
-
-    private func detectedModesFromAPI() -> Set<StationMode.SingleMode> {
-        let tokens: [String] = {
-            var values: [String] = []
-            if let type { values.append(type) }
-            if let category { values.append(category) }
-            if let products, !products.isEmpty { values.append(contentsOf: products) }
-            return values
-        }()
-
-        var modes = Set<StationMode.SingleMode>()
-        for token in tokens.map({ $0.uppercased() }) {
-            if token.contains("BUS") { modes.insert(.bus) }
-            if token.contains("METRO") || token == "M" || token.contains("TRAM") { modes.insert(.metro) }
-            if token.contains("TOG") || token.contains("TRAIN") || token.contains("RAIL") || token == "S" || token == "IC" {
-                modes.insert(.tog)
-            }
-        }
-        return modes
     }
 
     var coordinate: CLLocationCoordinate2D {

@@ -12,6 +12,12 @@ struct StationGroupModel: Identifiable, Hashable {
         self.baseName = baseName
         self.stations = stations
         self.mergedMode = Self.resolveMergedMode(stations)
+        Self.debugGroupMode(
+            key: id,
+            name: baseName,
+            stations: stations,
+            finalMode: mergedMode
+        )
     }
 
     var nearestDistanceMeters: Double? {
@@ -41,6 +47,59 @@ struct StationGroupModel: Identifiable, Hashable {
             }
         }
         return .unknown
+    }
+
+    private static func modeSetString(_ modes: Set<StationModel.StationMode.SingleMode>) -> String {
+        modes.map { $0.rawValue.lowercased() }.sorted().joined(separator: ",")
+    }
+
+    private static func modeLabel(_ mode: StationModel.StationMode) -> String {
+        switch mode {
+        case .bus:
+            return "bus"
+        case .metro:
+            return "metro"
+        case .tog:
+            return "tog"
+        case .mixed(let set):
+            return "mixed(\(modeSetString(set)))"
+        case .unknown:
+            return "unknown"
+        }
+    }
+
+    private static func debugGroupMode(
+        key: String,
+        name: String,
+        stations: [StationModel],
+        finalMode: StationModel.StationMode
+    ) {
+        #if DEBUG
+        emit("[ModeDebug][Group] key=\(key) name=\"\(name)\" members=\(stations.count)")
+
+        var aggregated = Set<StationModel.StationMode.SingleMode>()
+        for station in stations {
+            let resolution = station.modeResolution
+            aggregated.formUnion(resolution.modes)
+
+            let productsToken = station.products?.isEmpty == false ? "[\(station.products!.joined(separator: ","))]" : "[]"
+            let rawProductsParts = [
+                "bitmask=\(station.productsBitmask.map(String.init) ?? "nil")",
+                "tokens=\(productsToken)",
+                "productAtStopCount=\(station.productAtStop?.count ?? 0)"
+            ].joined(separator: " ")
+            let coord = String(format: "(%.6f,%.6f)", station.latitude, station.longitude)
+            let memberMode = resolution.modes.isEmpty ? "unknown" : modeSetString(resolution.modes)
+            emit("  - stop id=\(station.id) name=\"\(station.name)\" type=\(station.type ?? "nil") products=\(productsToken) rawProducts={\(rawProductsParts)} coord=\(coord) mode=\(memberMode) reason=\(resolution.reason)")
+        }
+
+        let aggregatedText = aggregated.isEmpty ? "unknown" : modeSetString(aggregated)
+        emit("  => aggregated={\(aggregatedText)} final=\(modeLabel(finalMode))")
+        #endif
+    }
+
+    private static func emit(_ message: String) {
+        fputs("\(message)\n", stderr)
     }
 
     var subtitle: String {

@@ -35,7 +35,7 @@ struct StationModeVisualStyle {
             markerTint = UIColor.systemPurple.withAlphaComponent(0.30)
             glyphTint = UIColor.systemPurple
         case .unknown:
-            symbolName = "mappin.and.ellipse"
+            symbolName = "questionmark.circle"
             badgeBackground = Color(uiColor: .systemGray5)
             iconColor = Color(uiColor: .systemGray)
             markerTint = UIColor.systemGray4
