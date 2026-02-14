@@ -601,6 +601,76 @@ final class NuCoreTests: XCTestCase {
     }
 
     @MainActor
+    func testWalkingETA_NoDefaultFive() {
+        let vm = DepartureBoardViewModel(
+            stationId: "8600626",
+            apiService: MockIntegrationAPIService(),
+            locationManager: MockLocationManager(authorizationStatus: .authorizedWhenInUse, currentLocation: nil),
+            walkingETAService: MockWalkingETAService(result: .success(WalkETA(minutes: 4, distanceMeters: 300, source: .hafasWalk)))
+        )
+
+        XCTAssertEqual(vm.walkingETAState, .idle)
+        XCTAssertEqual(vm.walkingTimeDisplayText, L10n.tr("departures.walking.calculating"))
+    }
+
+    func testWalkingETA_PicksLongestWalkLeg() {
+        let summary = WalkingETAService.selectWalkingSummary(from: [
+            .init(durationSeconds: 120, distanceMeters: 160),
+            .init(durationSeconds: 240, distanceMeters: 320)
+        ])
+        XCTAssertNotNil(summary)
+        // Current strategy sums all WALK legs to avoid underestimating when first leg is only an in-station segment.
+        XCTAssertEqual(summary?.totalDurationSeconds, 360)
+        XCTAssertEqual(summary?.totalDistanceMeters, 480)
+    }
+
+    func testWalkingETA_SkyttegadeTripChainAndCache() async throws {
+        URLProtocolMock.requestCount = 0
+        URLProtocolMock.testData = """
+        {
+          "TripList": {
+            "Trip": [{
+              "LegList": {
+                "Leg": [
+                  {
+                    "type": "WALK",
+                    "duration": "00:02:00",
+                    "dist": 180,
+                    "Origin": { "name": "Street A" },
+                    "Destination": { "name": "Transfer Hall" }
+                  },
+                  {
+                    "type": "WALK",
+                    "duration": "00:04:00",
+                    "dist": 320,
+                    "Origin": { "name": "Transfer Hall" },
+                    "Destination": { "name": "Skyttegade" }
+                  }
+                ]
+              }
+            }]
+          }
+        }
+        """.data(using: .utf8)
+
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [URLProtocolMock.self]
+        let session = URLSession(configuration: config)
+        let service = WalkingETAService(
+            client: HafasClient(session: session),
+            apiService: MockIntegrationAPIService()
+        )
+        let origin = CLLocationCoordinate2D(latitude: 55.6871, longitude: 12.5458)
+
+        let first = try await service.fetchWalkETA(origin: origin, destStopId: "skyttegade-entrance")
+        let second = try await service.fetchWalkETA(origin: origin, destStopId: "skyttegade-entrance")
+
+        XCTAssertEqual(first.minutes, 6, "2min + 4min WALK legs should sum to 6min")
+        XCTAssertEqual(second.minutes, 6, "Second fetch should return cached value")
+        XCTAssertEqual(URLProtocolMock.requestCount, 1, "Second fetch should hit in-memory cache")
+    }
+
+    @MainActor
     func testNearbyViewModelRefreshBuildsGroupedStations() async {
         let locationManager = MockLocationManager(
             authorizationStatus: .authorizedWhenInUse,
@@ -736,6 +806,42 @@ private struct MockIntegrationAPIService: APIServiceProtocol {
     func fetchJourneyDetail(id: String, date: String?) async throws -> JourneyDetail {
         JourneyDetail(stops: [])
     }
+}
+
+private final class MockWalkingETAService: WalkingETAServiceProtocol {
+    private let result: Result<WalkETA, Error>
+
+    init(result: Result<WalkETA, Error>) {
+        self.result = result
+    }
+
+    func fetchWalkETA(origin: CLLocationCoordinate2D, destStopId: String) async throws -> WalkETA {
+        try result.get()
+    }
+}
+
+private final class URLProtocolMock: URLProtocol {
+    nonisolated(unsafe) static var testData: Data?
+    nonisolated(unsafe) static var requestCount: Int = 0
+
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        Self.requestCount += 1
+        let data = Self.testData ?? Data()
+        let response = HTTPURLResponse(
+            url: request.url!,
+            statusCode: 200,
+            httpVersion: nil,
+            headerFields: ["Content-Type": "application/json"]
+        )!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: data)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+
+    override func stopLoading() {}
 }
 
 private final class InMemoryKeyValueStore: KeyValueStoring {

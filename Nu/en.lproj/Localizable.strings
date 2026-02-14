@@ -79,6 +79,8 @@
 "departures.walking.source.atStation" = "At station";
 "departures.walking.source.preset" = "Preset";
 "departures.walking.source.fallback" = "Conservative";
+"departures.walking.calculating" = "Calculating...";
+"departures.walking.waitingGPS" = "Waiting for GPS...";
 "departures.reliability.legend.label" = "Reliability legend";
 "departures.reliability.legend.value" = "Green is high reliability above 0.8. Orange is medium reliability from 0.5 to 0.8. Gray is low reliability below 0.5.";
 "departures.status.onTime" = "On time";
