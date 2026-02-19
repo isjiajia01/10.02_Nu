@@ -14,16 +14,19 @@ struct FavoriteStation: Codable, Identifiable, Hashable {
 extension FavoriteStation: StationTypeStylable {
     var stationType: String? {
         if let raw = type?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty {
-            return raw.uppercased()
+            let upper = raw.uppercased()
+            // 只接受已知的交通方式值；"ST"/"ADR"/"POI" 等地点类型不是交通方式
+            if ["BUS", "METRO", "TOG"].contains(upper) {
+                return upper
+            }
         }
 
-        // 历史收藏可能没有保存 type，做轻量推断，避免退化成灰色定位针。
+        // 历史收藏可能没有保存 type，做轻量推断。
+        // 仅允许明确的名字标识，禁止用 "St." 推断 TOG。
         let lower = name.lowercased()
-        if lower.contains("metro") { return "METRO" }
+        if lower.contains("(metro)") || lower.contains("metro") { return "METRO" }
+        if lower.contains("(s-tog)") || lower.contains("(s‑tog)") { return "TOG" }
         if lower.contains("bus") { return "BUS" }
-        if lower.contains("tog") || lower.contains("st.") || lower.contains("station") {
-            return "TOG"
-        }
         return nil
     }
 }

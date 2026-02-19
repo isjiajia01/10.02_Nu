@@ -63,32 +63,35 @@ final class MockAPIService: APIServiceProtocol {
         try await Task.sleep(nanoseconds: 200_000_000)
 
         return [
-            // TOG（红）
+            // TOG（红）— S-tog cls=8
             StationModel(
                 id: "001",
                 name: "København H",
                 latitude: 55.672750,
                 longitude: 12.565530,
                 distanceMeters: 150,
-                type: "TOG"
+                type: "ST",
+                productsBitmask: 8
             ),
-            // METRO（深蓝）
+            // METRO（深蓝）— Metro cls=64
             StationModel(
                 id: "002",
-                name: "Rådhuspladsen",
+                name: "Rådhuspladsen (Metro)",
                 latitude: 55.676130,
                 longitude: 12.569290,
                 distanceMeters: 420,
-                type: "METRO"
+                type: "ST",
+                productsBitmask: 64
             ),
-            // BUS（黄）
+            // BUS（黄）— Bus cls=16
             StationModel(
                 id: "003",
                 name: "Nørreport (Bus)",
                 latitude: 55.683290,
                 longitude: 12.571450,
                 distanceMeters: 880,
-                type: "BUS"
+                type: "ST",
+                productsBitmask: 16
             )
         ]
     }

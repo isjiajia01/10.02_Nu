@@ -2,11 +2,13 @@ import Foundation
 import CoreLocation
 import Combine
 
-/// 位置服务管理器。
+/// Shared location service.
 ///
-/// 说明：
-/// - 负责请求定位权限、接收定位更新。
-/// - 通过 `@Published` 暴露状态供 ViewModel/View 绑定。
+/// Two-stage accuracy strategy:
+/// - Starts with `kCLLocationAccuracyHundredMeters` for a fast first fix (~1-2s).
+/// - Switches to `kCLLocationAccuracyNearestTenMeters` once a usable fix arrives.
+///
+/// All tabs share a single instance (owned by MainTabView).
 @MainActor
 final class LocationManager: NSObject, ObservableObject {
     @Published var authorizationStatus: CLAuthorizationStatus = .notDetermined
@@ -14,27 +16,34 @@ final class LocationManager: NSObject, ObservableObject {
     @Published var lastError: Error?
 
     private let manager = CLLocationManager()
+    private var hasRefinedAccuracy = false
 
     override init() {
         super.init()
         manager.delegate = self
-        manager.desiredAccuracy = kCLLocationAccuracyNearestTenMeters
-        manager.distanceFilter = 10
+        // Stage 1: coarse accuracy for fast first fix.
+        manager.desiredAccuracy = kCLLocationAccuracyHundredMeters
+        manager.distanceFilter = 15
     }
 
-    /// 请求“使用期间”定位权限。
     func requestAuthorization() {
         manager.requestWhenInUseAuthorization()
     }
 
-    /// 开始持续定位。
     func startUpdatingLocation() {
         manager.startUpdatingLocation()
     }
 
-    /// 停止定位，节省电量。
     func stopUpdatingLocation() {
         manager.stopUpdatingLocation()
+    }
+
+    /// Switch to fine accuracy after the first usable fix.
+    private func refineAccuracyIfNeeded() {
+        guard !hasRefinedAccuracy else { return }
+        hasRefinedAccuracy = true
+        manager.desiredAccuracy = kCLLocationAccuracyNearestTenMeters
+        manager.distanceFilter = 10
     }
 }
 
@@ -60,7 +69,12 @@ extension LocationManager: CLLocationManagerDelegate {
 
     nonisolated func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
         Task { @MainActor in
-            currentLocation = locations.last
+            guard let location = locations.last else { return }
+            currentLocation = location
+            // Once we have any usable fix, switch to fine accuracy.
+            if location.horizontalAccuracy > 0, location.horizontalAccuracy <= 5000 {
+                refineAccuracyIfNeeded()
+            }
         }
     }
 

@@ -1,30 +1,28 @@
 import SwiftUI
 
-/// 发车板页面。
+/// Departure board screen.
 ///
-/// 说明：
-/// - 使用 `DepartureBoardViewModel` 拉取指定站点发车数据。
-/// - 每一项通过 `GlassDepartureCard` 呈现。
+/// Uses `DepartureBoardViewModel` to fetch departures for a station.
+/// Each item is rendered via `GlassDepartureCard`.
 struct DepartureBoardView: View {
     private let stationId: String
     private let stationExtId: String?
     private let stationGlobalId: String?
     private let stationName: String?
     private let stationType: String?
+    private let walkingDestinations: [WalkingETADestination]
     private let apiServiceForDetail: APIServiceProtocol
     @StateObject private var viewModel: DepartureBoardViewModel
     @StateObject private var favoritesManager = FavoritesManager.shared
     @State private var isWalkingPanelExpanded = false
 
-    /// - Parameters:
-    ///   - stationId: 站点 ID。
-    ///   - apiService: 可注入真实服务或 Mock 服务。
     init(
         stationId: String,
         stationExtId: String? = nil,
         stationGlobalId: String? = nil,
         stationName: String? = nil,
         stationType: String? = nil,
+        walkingDestinations: [WalkingETADestination] = [],
         apiService: APIServiceProtocol = RejseplanenAPIService()
     ) {
         self.stationId = stationId
@@ -32,8 +30,13 @@ struct DepartureBoardView: View {
         self.stationGlobalId = stationGlobalId
         self.stationName = stationName
         self.stationType = stationType
+        self.walkingDestinations = walkingDestinations
         self.apiServiceForDetail = apiService
-        _viewModel = StateObject(wrappedValue: DepartureBoardViewModel(stationId: stationId, apiService: apiService))
+        _viewModel = StateObject(wrappedValue: DepartureBoardViewModel(
+            stationId: stationId,
+            walkingDestinations: walkingDestinations,
+            apiService: apiService
+        ))
     }
 
     var body: some View {
@@ -66,31 +69,37 @@ struct DepartureBoardView: View {
                             .padding(.horizontal, 6)
                         }
 
-                        WalkingSimulationCard(
-                            walkingMinutes: viewModel.simulatedWalkingTime
-                            ,
+                        WalkAndDelayCard(
+                            walkingTimeTitleText: viewModel.walkingTimeTitleText,
+                            walkingTimeDisplayText: viewModel.walkingTimeDisplayText,
+                            walkingEstimateHintText: viewModel.walkingEstimateHintText,
                             sourceLabel: viewModel.walkTimeSource.displayName,
-                            intervalText: viewModel.walkingTimeIntervalText,
                             updateStatusText: viewModel.walkingUpdateStatusText,
+                            departureDelayMinutes: viewModel.departureDelayMinutes,
+                            departureDelayDisplayText: viewModel.departureDelayDisplayText,
                             activePreset: viewModel.activePreset,
-                            isExpanded: isWalkingPanelExpanded
-                        ) { newValue in
-                            viewModel.updateSimulatedWalkingTime(newValue)
-                        } onPresetAtStation: {
-                            viewModel.applyAlreadyInStationPreset()
-                            withAnimation(.spring(response: 0.25, dampingFraction: 0.9)) {
-                                isWalkingPanelExpanded = false
+                            isExpanded: isWalkingPanelExpanded,
+                            onDelayChange: { newDelay in
+                                viewModel.updateDepartureDelay(newDelay)
+                            },
+                            onPresetAtStation: {
+                                viewModel.applyAlreadyInStationPreset()
+                                withAnimation(.spring(response: 0.25, dampingFraction: 0.9)) {
+                                    isWalkingPanelExpanded = false
+                                }
+                            },
+                            onPresetOnTheWay: {
+                                viewModel.applyOnTheWayPreset()
+                                withAnimation(.spring(response: 0.25, dampingFraction: 0.9)) {
+                                    isWalkingPanelExpanded = false
+                                }
+                            },
+                            onToggleExpand: {
+                                withAnimation(.spring(response: 0.25, dampingFraction: 0.9)) {
+                                    isWalkingPanelExpanded.toggle()
+                                }
                             }
-                        } onPresetOnTheWay: {
-                            viewModel.applyOnTheWayPreset()
-                            withAnimation(.spring(response: 0.25, dampingFraction: 0.9)) {
-                                isWalkingPanelExpanded = false
-                            }
-                        } onToggleExpand: {
-                            withAnimation(.spring(response: 0.25, dampingFraction: 0.9)) {
-                                isWalkingPanelExpanded.toggle()
-                            }
-                        }
+                        )
 
                         ReliabilityLegendView()
 
@@ -112,14 +121,18 @@ struct DepartureBoardView: View {
                                 ) {
                                     GlassDepartureCard(
                                         departure: departure,
-                                        catchProbabilityText: viewModel.catchProbabilityDisplay(for: departure)
+                                        catchProbabilityText: viewModel.catchProbabilityDisplay(for: departure),
+                                        directionText: viewModel.directionText(for: departure),
+                                        directionStyle: viewModel.directionChipStyle(for: departure)
                                     )
                                 }
                                 .buttonStyle(.plain)
                             } else {
                                 GlassDepartureCard(
                                     departure: departure,
-                                    catchProbabilityText: viewModel.catchProbabilityDisplay(for: departure)
+                                    catchProbabilityText: viewModel.catchProbabilityDisplay(for: departure),
+                                    directionText: viewModel.directionText(for: departure),
+                                    directionStyle: viewModel.directionChipStyle(for: departure)
                                 )
                             }
                         }
@@ -178,31 +191,57 @@ struct DepartureBoardView: View {
     }
 }
 
-private struct WalkingSimulationCard: View {
-    private let walkingMinutes: Double
-    private let sourceLabel: String
-    private let intervalText: String
-    private let updateStatusText: String?
-    private let activePreset: DepartureBoardViewModel.WalkPreset?
-    private let isExpanded: Bool
-    private let onChange: (Double) -> Void
-    private let onPresetAtStation: () -> Void
-    private let onPresetOnTheWay: () -> Void
-    private let onToggleExpand: () -> Void
+// MARK: - Walk & Delay Card
+
+/// Top card showing walk ETA (read-only) + departure delay (user input).
+private struct WalkAndDelayCard: View {
+    let walkingTimeTitleText: String
+    let walkingTimeDisplayText: String
+    let walkingEstimateHintText: String?
+    let sourceLabel: String
+    let updateStatusText: String?
+    let departureDelayMinutes: Int
+    let departureDelayDisplayText: String
+    let activePreset: DepartureBoardViewModel.WalkPreset?
+    let isExpanded: Bool
+    let onDelayChange: (Int) -> Void
+    let onPresetAtStation: () -> Void
+    let onPresetOnTheWay: () -> Void
+    let onToggleExpand: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
+            // Walk time (system-estimated, read-only)
             HStack {
-                Label(L10n.tr("departures.walking.label"), systemImage: "figure.walk")
+                Label(walkingTimeTitleText, systemImage: "figure.walk")
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.primary)
                 Spacer()
-                Text(L10n.tr("departures.walking.minutesInterval", Int(walkingMinutes), intervalText))
+                Text(walkingTimeDisplayText)
                     .font(.subheadline.weight(.bold))
                     .monospacedDigit()
                     .foregroundStyle(.primary)
             }
 
+            if let walkingEstimateHintText {
+                Text(walkingEstimateHintText)
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(.secondary)
+            }
+
+            // Departure delay display
+            HStack {
+                Label(L10n.tr("departures.walking.delay.label"), systemImage: "clock.arrow.2.circlepath")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.primary)
+                Spacer()
+                Text(departureDelayDisplayText)
+                    .font(.subheadline.weight(.bold))
+                    .monospacedDigit()
+                    .foregroundStyle(.blue)
+            }
+
+            // Presets row
             HStack(spacing: 8) {
                 Button(L10n.tr("departures.walking.preset.inStation")) {
                     onPresetAtStation()
@@ -249,17 +288,32 @@ private struct WalkingSimulationCard: View {
             }
 
             if isExpanded {
+                // Departure delay presets (one-tap)
+                HStack(spacing: 8) {
+                    ForEach([0, 5, 10], id: \.self) { preset in
+                        Button(delayPresetLabel(preset)) {
+                            onDelayChange(preset)
+                        }
+                        .font(.caption.weight(.semibold))
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                        .tint(departureDelayMinutes == preset ? .blue : .secondary.opacity(0.3))
+                    }
+                    Spacer()
+                }
+
+                // Fine-tune slider for departure delay
                 Slider(
                     value: Binding(
-                        get: { walkingMinutes },
-                        set: { onChange($0) }
+                        get: { Double(departureDelayMinutes) },
+                        set: { onDelayChange(Int($0.rounded())) }
                     ),
-                    in: 1...20,
+                    in: 0...20,
                     step: 1
                 ) {
-                    Text(L10n.tr("departures.walking.manual"))
+                    Text(L10n.tr("departures.walking.delay.slider"))
                 } minimumValueLabel: {
-                    Text("1")
+                    Text("0")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 } maximumValueLabel: {
@@ -267,7 +321,7 @@ private struct WalkingSimulationCard: View {
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
-                .accessibilityValue(L10n.tr("departures.walking.accessibility.value", Int(walkingMinutes)))
+                .accessibilityValue(L10n.tr("departures.walking.accessibility.value", departureDelayMinutes))
                 .accessibilityHint(L10n.tr("departures.walking.accessibility.hint"))
             }
         }
@@ -283,30 +337,18 @@ private struct WalkingSimulationCard: View {
         )
     }
 
-    init(
-        walkingMinutes: Double,
-        sourceLabel: String,
-        intervalText: String,
-        updateStatusText: String?,
-        activePreset: DepartureBoardViewModel.WalkPreset?,
-        isExpanded: Bool,
-        onChange: @escaping (Double) -> Void,
-        onPresetAtStation: @escaping () -> Void,
-        onPresetOnTheWay: @escaping () -> Void,
-        onToggleExpand: @escaping () -> Void
-    ) {
-        self.walkingMinutes = walkingMinutes
-        self.sourceLabel = sourceLabel
-        self.intervalText = intervalText
-        self.updateStatusText = updateStatusText
-        self.activePreset = activePreset
-        self.isExpanded = isExpanded
-        self.onChange = onChange
-        self.onPresetAtStation = onPresetAtStation
-        self.onPresetOnTheWay = onPresetOnTheWay
-        self.onToggleExpand = onToggleExpand
+    private func delayPresetLabel(_ minutes: Int) -> String {
+        if minutes == 0 {
+            return L10n.tr("departures.walking.delay.preset.0")
+        } else if minutes == 5 {
+            return L10n.tr("departures.walking.delay.preset.5")
+        } else {
+            return L10n.tr("departures.walking.delay.preset.10")
+        }
     }
 }
+
+// MARK: - Reliability Legend
 
 private struct ReliabilityLegendView: View {
     var body: some View {

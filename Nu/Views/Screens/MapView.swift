@@ -15,11 +15,26 @@ struct MapView: View {
     @State private var debounceTask: Task<Void, Never>?
     @State private var inFlightFetchTask: Task<Void, Never>?
 
-    @StateObject private var locationManager = LocationManager()
+    // Two-stage location state
+    @State private var authStatus: CLAuthorizationStatus = .notDetermined
+    @State private var hasReceivedFirstFix = false
+    @State private var hasReceivedStableFix = false
+    @State private var hasShownFallbackToast = false
+    @State private var stableRefreshTask: Task<Void, Never>?
+    @State private var fallbackToastTask: Task<Void, Never>?
+
+    // Location state
+    @State private var isLocating = true
+
+    private let locationManager: LocationManaging
     private let apiService: APIServiceProtocol
 
-    init(apiService: APIServiceProtocol? = nil) {
-        self.apiService = apiService ?? RejseplanenAPIService()
+    private let fallbackLon = 12.568337
+    private let fallbackLat = 55.676098
+
+    init(apiService: APIServiceProtocol = RejseplanenAPIService(), locationManager: LocationManaging) {
+        self.apiService = apiService
+        self.locationManager = locationManager
     }
 
     var body: some View {
@@ -36,6 +51,13 @@ struct MapView: View {
 
             if isLoading {
                 ProgressView(L10n.tr("map.loading"))
+                    .padding()
+                    .background(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .fill(Color(.systemBackground).opacity(0.9))
+                    )
+            } else if isLocating, stationGroups.isEmpty {
+                ProgressView(L10n.tr("map.locating"))
                     .padding()
                     .background(
                         RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -91,18 +113,22 @@ struct MapView: View {
         .task {
             await startMapFlow()
         }
-        .onChange(of: locationManager.authorizationStatus) { _, newValue in
-            guard newValue == .authorizedAlways || newValue == .authorizedWhenInUse else { return }
-            Task { await loadStations() }
+        .onReceive(locationManager.currentLocationPublisher) { location in
+            handleLocationUpdate(location)
+        }
+        .onReceive(locationManager.authorizationStatusPublisher) { auth in
+            authStatus = auth
         }
         .onDisappear {
             debounceTask?.cancel()
             inFlightFetchTask?.cancel()
+            stableRefreshTask?.cancel()
+            fallbackToastTask?.cancel()
         }
     }
 
     private var isLocationDenied: Bool {
-        locationManager.authorizationStatus == .denied || locationManager.authorizationStatus == .restricted
+        authStatus == .denied || authStatus == .restricted
     }
 
     private var permissionDeniedOverlay: some View {
@@ -124,30 +150,123 @@ struct MapView: View {
         .padding(.horizontal, 16)
     }
 
+    // MARK: - Map flow
+
     private func startMapFlow() async {
         errorMessage = nil
-        isLoading = true
+        isLocating = true
+        authStatus = locationManager.authorizationStatus
 
         locationManager.requestAuthorization()
         locationManager.startUpdatingLocation()
-        await loadStations()
+
+        // Don't load Copenhagen stations — wait for user location.
+        // Map renders with default region; "Locating..." indicator shown.
+
+        // Schedule fallback: 5s with no firstFix → load Copenhagen + toast.
+        fallbackToastTask?.cancel()
+        fallbackToastTask = Task {
+            try? await Task.sleep(nanoseconds: 5_000_000_000)
+            guard !Task.isCancelled, !hasReceivedFirstFix, !hasShownFallbackToast else { return }
+            if !isLocationDenied {
+                hasShownFallbackToast = true
+                errorMessage = L10n.tr("map.locationFallback")
+            }
+            isLocating = false
+            await loadStations(coordX: fallbackLon, coordY: fallbackLat, isFallback: true)
+        }
     }
 
-    private func loadStations() async {
-        let fallbackLon = 12.568337
-        let fallbackLat = 55.676098
+    // MARK: - Two-stage location handling (via .onReceive)
 
-        let rawLon = locationManager.currentLocation?.coordinate.longitude
-        let rawLat = locationManager.currentLocation?.coordinate.latitude
-        let shouldUseFallback = !isLikelyInDenmark(latitude: rawLat, longitude: rawLon)
+    private func handleLocationUpdate(_ location: CLLocation?) {
+        guard let location else { return }
 
-        let coordX = shouldUseFallback ? fallbackLon : (rawLon ?? fallbackLon)
-        let coordY = shouldUseFallback ? fallbackLat : (rawLat ?? fallbackLat)
+        // Stage 1: First fix (coarse) — recenter map fast, load stations.
+        if !hasReceivedFirstFix, isFirstFix(location) {
+            hasReceivedFirstFix = true
+            isLocating = false
+            fallbackToastTask?.cancel()
+            errorMessage = nil
 
-        if shouldUseFallback {
-            errorMessage = L10n.tr("map.locationFallback")
+            // Recenter map immediately.
+            focusCoordinate = location.coordinate
+            focusToken += 1
+
+            // Load stations from user location right away.
+            Task {
+                await loadStationsFromLocation(location)
+            }
+
+            // Schedule a delayed refresh for when stableFix arrives.
+            stableRefreshTask?.cancel()
+            stableRefreshTask = Task {
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                guard !Task.isCancelled, !hasReceivedStableFix else { return }
+                // 2s passed without stableFix — already loaded from firstFix, no action needed.
+            }
         }
 
+        // Stage 2: Stable fix (accurate) — load stations with precise location.
+        if !hasReceivedStableFix, isStableFix(location) {
+            hasReceivedStableFix = true
+            stableRefreshTask?.cancel()
+            fallbackToastTask?.cancel()
+            errorMessage = nil
+
+            Task {
+                await loadStationsFromLocation(location)
+            }
+        }
+    }
+
+    // MARK: - Fix validation (two tiers)
+
+    /// Coarse fix: fast, for map recentering. Accepts up to 5km accuracy, 60s age.
+    private func isFirstFix(_ location: CLLocation) -> Bool {
+        let coord = location.coordinate
+        guard CLLocationCoordinate2DIsValid(coord) else { return false }
+        guard !(coord.latitude == 0 && coord.longitude == 0) else { return false }
+        guard location.horizontalAccuracy > 0, location.horizontalAccuracy <= 5000 else { return false }
+        guard abs(location.timestamp.timeIntervalSinceNow) < 60 else { return false }
+        return true
+    }
+
+    /// Accurate fix: for station loading. Requires <=1000m accuracy, 30s freshness.
+    private func isStableFix(_ location: CLLocation) -> Bool {
+        let coord = location.coordinate
+        guard CLLocationCoordinate2DIsValid(coord) else { return false }
+        guard !(coord.latitude == 0 && coord.longitude == 0) else { return false }
+        guard location.horizontalAccuracy > 0, location.horizontalAccuracy <= 1000 else { return false }
+        guard abs(location.timestamp.timeIntervalSinceNow) < 30 else { return false }
+        return true
+    }
+
+    private func isLikelyInDenmark(_ location: CLLocation) -> Bool {
+        let lat = location.coordinate.latitude
+        let lon = location.coordinate.longitude
+        return (54.0...58.0).contains(lat) && (7.0...16.5).contains(lon)
+    }
+
+    // MARK: - Station loading
+
+    private func loadStationsFromLocation(_ location: CLLocation) async {
+        if isLikelyInDenmark(location) {
+            await loadStations(
+                coordX: location.coordinate.longitude,
+                coordY: location.coordinate.latitude,
+                isFallback: false
+            )
+        } else {
+            await loadStations(coordX: fallbackLon, coordY: fallbackLat, isFallback: true)
+            if !hasShownFallbackToast {
+                hasShownFallbackToast = true
+                errorMessage = L10n.tr("map.locationFallback")
+            }
+        }
+    }
+
+    private func loadStations(coordX: Double, coordY: Double, isFallback: Bool) async {
         do {
             let initialQuery = MapRefreshQuery.from(
                 center: CLLocationCoordinate2D(latitude: coordY, longitude: coordX),
@@ -164,7 +283,7 @@ struct MapView: View {
             pendingQuery = nil
             showSearchAreaButton = false
 
-            if !shouldUseFallback {
+            if !isFallback {
                 errorMessage = nil
             }
 
@@ -181,11 +300,6 @@ struct MapView: View {
         }
 
         isLoading = false
-    }
-
-    private func isLikelyInDenmark(latitude: Double?, longitude: Double?) -> Bool {
-        guard let latitude, let longitude else { return false }
-        return (54.0...58.0).contains(latitude) && (7.0...16.5).contains(longitude)
     }
 
     private func openAppSettings() {
@@ -226,7 +340,7 @@ struct MapView: View {
         errorMessage = nil
         showSearchAreaButton = false
 
-        let task = Task {
+        inFlightFetchTask = Task {
             do {
                 try Task.checkCancellation()
                 let fetched = try await apiService.fetchNearbyStops(
@@ -236,24 +350,17 @@ struct MapView: View {
                     maxNo: query.maxNo
                 )
                 guard !Task.isCancelled else { return }
-                await MainActor.run {
-                    stationGroups = StationGrouping.buildGroups(fetched)
-                    lastRefreshQuery = query
-                    pendingQuery = nil
-                    isLoading = false
-                }
+                stationGroups = StationGrouping.buildGroups(fetched)
+                lastRefreshQuery = query
+                pendingQuery = nil
+                isLoading = false
             } catch is CancellationError {
-                await MainActor.run {
-                    isLoading = false
-                }
+                isLoading = false
             } catch {
-                await MainActor.run {
-                    errorMessage = AppErrorPresenter.message(for: error, context: .map)
-                    isLoading = false
-                }
+                errorMessage = AppErrorPresenter.message(for: error, context: .map)
+                isLoading = false
             }
         }
-        inFlightFetchTask = task
     }
 
     private func shouldRefresh(from previous: MapRefreshQuery?, to next: MapRefreshQuery) -> Bool {

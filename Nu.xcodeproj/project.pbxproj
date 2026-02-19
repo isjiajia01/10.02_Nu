@@ -24,10 +24,10 @@
 
 /* Begin PBXFileReference section */
 		07212D752F3CA3EE00AC4FAB /* airead.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = airead.json; sourceTree = "<group>"; };
+		073B1FFE2F3C6BA800935AB6 /* Nu.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Nu.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		08A111D12F50000100A10001 /* NuCoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NuCoreTests.swift; sourceTree = "<group>"; };
 		08A111D22F50000100A10001 /* XCTest.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = XCTest.framework; path = System/Library/Frameworks/XCTest.framework; sourceTree = SDKROOT; };
 		08A111D32F50000100A10001 /* NuTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = NuTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
-		073B1FFE2F3C6BA800935AB6 /* Nu.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Nu.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -64,15 +64,8 @@
 				073B20002F3C6BA800935AB6 /* Nu */,
 				08A111A12F50000100A10001 /* NuTests */,
 				073B1FFF2F3C6BA800935AB6 /* Products */,
+				07F68FE72F3FA68400C99050 /* Recovered References */,
 			);
-			sourceTree = "<group>";
-		};
-		08A111A12F50000100A10001 /* NuTests */ = {
-			isa = PBXGroup;
-			children = (
-				08A111D12F50000100A10001 /* NuCoreTests.swift */,
-			);
-			path = NuTests;
 			sourceTree = "<group>";
 		};
 		073B1FFF2F3C6BA800935AB6 /* Products */ = {
@@ -82,6 +75,22 @@
 				08A111D32F50000100A10001 /* NuTests.xctest */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		07F68FE72F3FA68400C99050 /* Recovered References */ = {
+			isa = PBXGroup;
+			children = (
+				08A111D22F50000100A10001 /* XCTest.framework */,
+			);
+			name = "Recovered References";
+			sourceTree = "<group>";
+		};
+		08A111A12F50000100A10001 /* NuTests */ = {
+			isa = PBXGroup;
+			children = (
+				08A111D12F50000100A10001 /* NuCoreTests.swift */,
+			);
+			path = NuTests;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -351,7 +360,7 @@
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = Jiajia.Nu;
 				PRODUCT_NAME = "$(TARGET_NAME)";
-				REJSEPLANEN_ACCESS_ID = "";
+				REJSEPLANEN_ACCESS_ID = "2a7c46dc-7abf-460a-9782-a25a241c1cc9";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
@@ -386,7 +395,7 @@
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = Jiajia.Nu;
 				PRODUCT_NAME = "$(TARGET_NAME)";
-				REJSEPLANEN_ACCESS_ID = "";
+				REJSEPLANEN_ACCESS_ID = "2a7c46dc-7abf-460a-9782-a25a241c1cc9";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;

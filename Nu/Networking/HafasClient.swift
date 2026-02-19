@@ -6,13 +6,15 @@ enum HafasServicePath: String {
     case departureBoard = "departureBoard"
     case multiDepartureBoard = "multiDepartureBoard"
     case journeyDetail = "journeyDetail"
+    case trip = "trip"
+    case dataInfo = "datainfo"
 }
 
 struct HafasRequestContext: Sendable {
     let requestId: String
     let context: [String: String]
 
-    init(requestId: String = UUID().uuidString, context: [String: String] = [:]) {
+    nonisolated init(requestId: String = UUID().uuidString, context: [String: String] = [:]) {
         self.requestId = requestId
         self.context = context
     }
@@ -35,7 +37,7 @@ struct HafasWarningsContainer: Decodable {
         case warningsLower = "warnings"
     }
 
-    init(from decoder: Decoder) throws {
+    nonisolated init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         if let list = try? container.decode([Warning].self, forKey: .warnings) {
             warnings = list
@@ -48,7 +50,7 @@ struct HafasWarningsContainer: Decodable {
 }
 
 enum HafasDecoder {
-    static func decode<T: Decodable>(_ type: T.Type, from data: Data, decoder: JSONDecoder) throws -> T {
+    nonisolated static func decode<T: Decodable>(_ type: T.Type, from data: Data, decoder: JSONDecoder) throws -> T {
         if let direct = try? decoder.decode(T.self, from: data) {
             return direct
         }
@@ -62,22 +64,22 @@ enum HafasDecoder {
 }
 
 struct HafasResponse<T: Decodable> {
-    let value: T
-    let warnings: [HafasWarningsContainer.Warning]
-    let requestId: String
-    let context: [String: String]
+    nonisolated let value: T
+    nonisolated let warnings: [HafasWarningsContainer.Warning]
+    nonisolated let requestId: String
+    nonisolated let context: [String: String]
 }
 
 final class HafasClient {
     private let session: URLSession
     private let decoder: JSONDecoder
 
-    init(session: URLSession = .shared, decoder: JSONDecoder = JSONDecoder()) {
+    nonisolated init(session: URLSession = .shared, decoder: JSONDecoder = JSONDecoder()) {
         self.session = session
         self.decoder = decoder
     }
 
-    func request<T: Decodable>(
+    nonisolated func request<T: Decodable>(
         service: HafasServicePath,
         queryItems: [URLQueryItem],
         method: String = "GET",
@@ -118,13 +120,13 @@ final class HafasClient {
         throw lastError
     }
 
-    func makeURL(service: HafasServicePath, queryItems: [URLQueryItem]) throws -> URL {
+    nonisolated func makeURL(service: HafasServicePath, queryItems: [URLQueryItem]) throws -> URL {
         try makeURLCandidates(service: service, queryItems: queryItems).first ?? {
             throw APIError.invalidRequest
         }()
     }
 
-    private func execute<T: Decodable>(
+    private nonisolated func execute<T: Decodable>(
         request: URLRequest,
         as type: T.Type,
         context: HafasRequestContext
@@ -164,7 +166,7 @@ final class HafasClient {
         return (value, warnings)
     }
 
-    private func extractServerText(from data: Data) -> String? {
+    private nonisolated func extractServerText(from data: Data) -> String? {
         if
             let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
             let message = object["error"] as? String
@@ -183,7 +185,7 @@ final class HafasClient {
         return nil
     }
 
-    private func buildURL(base: URL, queryItems: [URLQueryItem]) -> URL? {
+    private nonisolated func buildURL(base: URL, queryItems: [URLQueryItem]) -> URL? {
         guard var components = URLComponents(url: base, resolvingAgainstBaseURL: false) else {
             return nil
         }
@@ -196,21 +198,21 @@ final class HafasClient {
         return components.url
     }
 
-    static func encodeQueryValue(_ value: String?) -> String? {
+    nonisolated static func encodeQueryValue(_ value: String?) -> String? {
         guard let value else { return nil }
         var allowed = CharacterSet.urlQueryAllowed
         allowed.remove(charactersIn: "|")
         return value.addingPercentEncoding(withAllowedCharacters: allowed)
     }
 
-    private func makeRequests(
+    private nonisolated func makeRequests(
         service: HafasServicePath,
         queryItems: [URLQueryItem],
         method: String,
         context: HafasRequestContext
     ) throws -> [URLRequest] {
         let urlCandidates = try makeURLCandidates(service: service, queryItems: queryItems)
-        return try urlCandidates.map { url in
+        return urlCandidates.map { url in
             var request = URLRequest(url: url)
             request.httpMethod = method
             request.timeoutInterval = 15
@@ -223,7 +225,7 @@ final class HafasClient {
         }
     }
 
-    private func makeURLCandidates(
+    private nonisolated func makeURLCandidates(
         service: HafasServicePath,
         queryItems: [URLQueryItem]
     ) throws -> [URL] {

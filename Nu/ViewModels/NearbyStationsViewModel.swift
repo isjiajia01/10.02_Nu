@@ -31,9 +31,8 @@ final class NearbyStationsViewModel: ObservableObject {
     private let apiService: APIServiceProtocol
     private let locationManager: LocationManaging
     private var debounceTask: Task<Void, Never>?
-    private var locationTask: Task<Void, Never>?
-    private var authorizationTask: Task<Void, Never>?
     private var bootstrapTask: Task<Void, Never>?
+    private var cancellables = Set<AnyCancellable>()
     private var hasStarted = false
     private let fallbackLongitude = 12.568337
     private let fallbackLatitude = 55.676098
@@ -47,9 +46,8 @@ final class NearbyStationsViewModel: ObservableObject {
 
     deinit {
         debounceTask?.cancel()
-        locationTask?.cancel()
-        authorizationTask?.cancel()
         bootstrapTask?.cancel()
+        cancellables.removeAll()
     }
 
     /// 视图首次加载入口。
@@ -92,27 +90,27 @@ final class NearbyStationsViewModel: ObservableObject {
     }
 
     private func observeLocationChanges() {
-        authorizationTask?.cancel()
-        authorizationTask = Task { [weak self] in
-            guard let self else { return }
+        cancellables.removeAll()
 
-            for await auth in self.locationManager.authorizationStatusPublisher.values {
+        locationManager.authorizationStatusPublisher
+            .receive(on: RunLoop.main)
+            .sink { [weak self] auth in
                 if auth == .denied || auth == .restricted {
-                    self.state = .error(L10n.tr("stations.locationDenied"))
+                    self?.state = .error(L10n.tr("stations.locationDenied"))
                 }
             }
-        }
+            .store(in: &cancellables)
 
-        locationTask?.cancel()
-        locationTask = Task { [weak self] in
-            guard let self else { return }
-            for await location in self.locationManager.currentLocationPublisher.values {
-                guard let location else { continue }
+        locationManager.currentLocationPublisher
+            .compactMap { $0 }
+            .receive(on: RunLoop.main)
+            .sink { [weak self] location in
+                guard let self else { return }
                 self.bootstrapTask?.cancel()
                 self.bootstrapTask = nil
-                await self.fetchNearbyStations(location: location)
+                Task { await self.fetchNearbyStations(location: location) }
             }
-        }
+            .store(in: &cancellables)
     }
 
     private func scheduleBootstrapFallback() {
@@ -155,6 +153,9 @@ final class NearbyStationsViewModel: ObservableObject {
             AppCacheStore.save(stations, key: cacheKey)
             isDataStale = false
             applyFilter()
+
+            // 异步 enrich 缺少 products 的站点（不阻塞列表展示）
+            await enrichStationsIfNeeded()
         } catch {
             let message = AppErrorPresenter.message(for: error, context: .stations)
             if stations.isEmpty {
@@ -176,13 +177,60 @@ final class NearbyStationsViewModel: ObservableObject {
         }
     }
 
+    /// 对缺少 products 的站点进行异步 enrich，拿到后局部刷新。
+    private func enrichStationsIfNeeded() async {
+        let unknownStations = stations.filter {
+            $0.productsBitmask == nil && $0.productAtStop == nil
+                && ($0.products == nil || $0.products?.isEmpty == true)
+                && $0.stationMode == .unknown
+        }
+        guard !unknownStations.isEmpty else { return }
+
+        let client = HafasClient()
+        var didUpdate = false
+
+        for station in unknownStations {
+            guard let enriched = await ProductClassCache.shared.enrichStop(
+                stopId: station.id, stopName: station.name, client: client
+            ) else { continue }
+
+            // 用 enriched 数据创建更新后的 StationModel
+            if let idx = stations.firstIndex(where: { $0.id == station.id }) {
+                let updated = StationModel(
+                    id: station.id,
+                    extId: station.extId,
+                    globalId: station.globalId,
+                    name: station.name,
+                    latitude: station.latitude,
+                    longitude: station.longitude,
+                    distanceMeters: station.distanceMeters,
+                    type: station.type,
+                    products: station.products,
+                    productsBitmask: enriched.productsBitmask,
+                    productAtStop: enriched.productAtStop,
+                    category: station.category,
+                    zone: station.zone,
+                    zoneSource: station.zoneSource,
+                    stationGroupId: station.stationGroupId
+                )
+                stations[idx] = updated
+                didUpdate = true
+            }
+        }
+
+        if didUpdate {
+            stationGroups = StationGrouping.buildGroups(stations)
+            applyFilter()
+        }
+    }
+
     /// 0.5 秒防抖，避免每次输入都立刻触发过滤。
     private func scheduleDebouncedFilter() {
         debounceTask?.cancel()
         debounceTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 500_000_000)
             guard !Task.isCancelled else { return }
-            await self?.applyFilter()
+            self?.applyFilter()
         }
     }
 

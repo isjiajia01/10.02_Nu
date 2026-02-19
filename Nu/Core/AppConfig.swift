@@ -10,7 +10,9 @@ enum AppConfig {
     // Rejseplanen 当前生产接口默认走 `/api/<service>`；
     // 若后端环境需要显式版本，可通过 `REJSEPLANEN_API_VERSION` 覆盖。
     private static let defaultAPIVersion = ""
-    private static let defaultAccessID = ""
+    private static let defaultAccessID = "2a7c46dc-7abf-460a-9782-a25a241c1cc9"
+    private static let defaultWalkETACalibrationMultiplier = 1.15
+    private static let defaultWalkETAOverheadSeconds = 60
 
     /// 支持通过环境变量覆写：`REJSEPLANEN_BASE_URL`。
     static var baseURLString: String {
@@ -29,8 +31,8 @@ enum AppConfig {
         if let configured, !configured.isEmpty {
             return configured
         }
-        if let bundleValue = Bundle.main.object(forInfoDictionaryKey: "REJSEPLANEN_ACCESS_ID") as? String {
-            let trimmed = bundleValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let bundleRaw = Bundle.main.object(forInfoDictionaryKey: "REJSEPLANEN_ACCESS_ID") {
+            let trimmed = String(describing: bundleRaw).trimmingCharacters(in: .whitespacesAndNewlines)
             if !trimmed.isEmpty {
                 return trimmed
             }
@@ -66,5 +68,23 @@ enum AppConfig {
     /// 鉴权参数是否有效。
     static var hasAccessID: Bool {
         !accessID.isEmpty
+    }
+
+    static var walkETACalibrationMultiplier: Double {
+        let configured = ProcessInfo.processInfo.environment["NU_WALK_ETA_MULTIPLIER"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if let configured, let parsed = Double(configured) {
+            return min(max(parsed, 1.0), 1.6)
+        }
+        return defaultWalkETACalibrationMultiplier
+    }
+
+    static var walkETAOverheadSeconds: Int {
+        let configured = ProcessInfo.processInfo.environment["NU_WALK_ETA_OVERHEAD_SECONDS"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if let configured, let parsed = Int(configured) {
+            return min(max(parsed, 0), 240)
+        }
+        return defaultWalkETAOverheadSeconds
     }
 }

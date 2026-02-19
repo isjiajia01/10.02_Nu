@@ -21,6 +21,7 @@ struct StationModel: Codable, Identifiable, Hashable {
     let productAtStop: [ProductAtStopEntry]?
     let category: String?
     let zone: String?
+    let zoneSource: String
     let stationGroupId: String?
 
     enum CodingKeys: String, CodingKey {
@@ -45,6 +46,8 @@ struct StationModel: Codable, Identifiable, Hashable {
         case category
         case cat
         case zone
+        case tariffZone
+        case zoneNo
         case parent
         case parentId
         case groupId
@@ -65,6 +68,7 @@ struct StationModel: Codable, Identifiable, Hashable {
         productAtStop: [ProductAtStopEntry]? = nil,
         category: String? = nil,
         zone: String? = nil,
+        zoneSource: String = "manual",
         stationGroupId: String? = nil
     ) {
         self.id = id
@@ -80,6 +84,7 @@ struct StationModel: Codable, Identifiable, Hashable {
         self.productAtStop = productAtStop
         self.category = category
         self.zone = zone
+        self.zoneSource = zoneSource
         self.stationGroupId = stationGroupId
     }
 
@@ -122,7 +127,9 @@ struct StationModel: Codable, Identifiable, Hashable {
 
         category = (try? container.decode(String.self, forKey: .category))
             ?? (try? container.decode(String.self, forKey: .cat))
-        zone = try? container.decode(String.self, forKey: .zone)
+        let decodedZone = Self.decodeZoneWithSource(container: container)
+        zone = decodedZone.value
+        zoneSource = decodedZone.source
         stationGroupId =
             (try? container.decode(String.self, forKey: .parent))
             ?? (try? container.decode(String.self, forKey: .parentId))
@@ -249,6 +256,18 @@ struct StationModel: Codable, Identifiable, Hashable {
             return [single]
         }
         return nil
+    }
+
+    private static func decodeZoneWithSource(
+        container: KeyedDecodingContainer<CodingKeys>
+    ) -> (value: String?, source: String) {
+        if let text = try? container.decode(String.self, forKey: .zone) { return (text, "zone") }
+        if let value = try? container.decode(Int.self, forKey: .zone) { return (String(value), "zoneInt") }
+        if let text = try? container.decode(String.self, forKey: .tariffZone) { return (text, "tariffZone") }
+        if let value = try? container.decode(Int.self, forKey: .tariffZone) { return (String(value), "tariffZoneInt") }
+        if let text = try? container.decode(String.self, forKey: .zoneNo) { return (text, "zoneNo") }
+        if let value = try? container.decode(Int.self, forKey: .zoneNo) { return (String(value), "zoneNoInt") }
+        return (nil, "missing")
     }
 }
 

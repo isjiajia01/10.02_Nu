@@ -515,6 +515,32 @@ final class NuCoreTests: XCTestCase {
                         "'St.' in name must NOT trigger .tog — must be .unknown")
     }
 
+    func testStationModelDecodesTariffZoneAndZoneInt() throws {
+        let raw = """
+        {
+          "id": "3026",
+          "name": "Skyttegade (Rantzausgade)",
+          "x": 12546928,
+          "y": 55687482,
+          "tariffZone": "01"
+        }
+        """.data(using: .utf8)!
+        let decoded = try JSONDecoder().decode(StationModel.self, from: raw)
+        XCTAssertEqual(decoded.zone, "01")
+
+        let rawInt = """
+        {
+          "id": "3027",
+          "name": "Skyttegade (Another)",
+          "x": 12546928,
+          "y": 55687482,
+          "zone": 2
+        }
+        """.data(using: .utf8)!
+        let decodedInt = try JSONDecoder().decode(StationModel.self, from: rawInt)
+        XCTAssertEqual(decodedInt.zone, "2")
+    }
+
     /// Group with metro + bus entrances must have mergedMode .mixed.
     func testStationGroupMixedEntrances() {
         let busEntrance = StationModel(
@@ -606,11 +632,112 @@ final class NuCoreTests: XCTestCase {
             stationId: "8600626",
             apiService: MockIntegrationAPIService(),
             locationManager: MockLocationManager(authorizationStatus: .authorizedWhenInUse, currentLocation: nil),
-            walkingETAService: MockWalkingETAService(result: .success(WalkETA(minutes: 4, distanceMeters: 300, source: .hafasWalk)))
+            walkingETAService: MockWalkingETAService(result: .success(WalkETA(minutes: 4, baseMinutes: 3, distanceMeters: 300, source: .hafasWalk)))
         )
 
         XCTAssertEqual(vm.walkingETAState, .idle)
         XCTAssertEqual(vm.walkingTimeDisplayText, L10n.tr("departures.walking.calculating"))
+    }
+
+    @MainActor
+    func testWalkingETA_FailureDoesNotShowFiveMinutes() async {
+        let vm = DepartureBoardViewModel(
+            stationId: "8600626",
+            apiService: MockIntegrationAPIService(),
+            locationManager: MockLocationManager(authorizationStatus: .denied, currentLocation: nil),
+            walkingETAService: MockWalkingETAService(result: .success(WalkETA(minutes: 4, baseMinutes: 3, distanceMeters: 300, source: .hafasWalk)))
+        )
+
+        await vm.fetchDepartures()
+
+        XCTAssertEqual(vm.walkingETAState, .failed)
+        XCTAssertEqual(vm.walkingTimeDisplayText, L10n.tr("departures.walking.unavailable"))
+    }
+
+    @MainActor
+    func testWalkingETA_UsesNearestModeStopPointAsDestination() async {
+        let origin = CLLocation(latitude: 55.6871, longitude: 12.5458)
+        let trackingService = TrackingWalkingETAService()
+        let vm = DepartureBoardViewModel(
+            stationId: "parent-station",
+            walkingDestinations: [
+                WalkingETADestination(
+                    stopId: "entrance-far",
+                    name: "Far Entrance",
+                    groupId: "group-parent",
+                    latitude: 55.7000,
+                    longitude: 12.5600,
+                    mode: .bus,
+                    isRecommended: false
+                ),
+                WalkingETADestination(
+                    stopId: "entrance-near",
+                    name: "Near Entrance",
+                    groupId: "group-parent",
+                    latitude: 55.6872,
+                    longitude: 12.5459,
+                    mode: .metro,
+                    isRecommended: true
+                )
+            ],
+            apiService: MockIntegrationAPIService(),
+            locationManager: MockLocationManager(authorizationStatus: .authorizedWhenInUse, currentLocation: origin),
+            walkingETAService: trackingService
+        )
+
+        await vm.fetchDepartures()
+        try? await Task.sleep(nanoseconds: 200_000_000)
+
+        let captured = await trackingService.lastDestination
+        XCTAssertEqual(captured?.stopId, "entrance-near")
+    }
+
+    @MainActor
+    func testWalkingETA_UsesUsableStaleLocationInsteadOfUnavailable() async {
+        let staleTimestamp = Date().addingTimeInterval(-300)
+        let staleLocation = CLLocation(
+            coordinate: CLLocationCoordinate2D(latitude: 55.6871, longitude: 12.5458),
+            altitude: 0,
+            horizontalAccuracy: 80,
+            verticalAccuracy: 80,
+            timestamp: staleTimestamp
+        )
+
+        let vm = DepartureBoardViewModel(
+            stationId: "8600626",
+            apiService: MockIntegrationAPIService(
+                departuresResult: [
+                    Departure(
+                        name: "68",
+                        type: "BUS",
+                        stop: "Nuuks Plads",
+                        time: "13:30",
+                        date: "13.02.26",
+                        rtTime: "13:32",
+                        rtDate: "13.02.26",
+                        direction: "Bella Center",
+                        finalStop: "Bella Center",
+                        track: nil,
+                        messages: nil
+                    )
+                ]
+            ),
+            locationManager: MockLocationManager(
+                authorizationStatus: .authorizedWhenInUse,
+                currentLocation: staleLocation
+            ),
+            walkingETAService: MockWalkingETAService(
+                result: .success(
+                    WalkETA(minutes: 4, baseMinutes: 3, distanceMeters: 320, source: .hafasWalk)
+                )
+            )
+        )
+
+        await vm.fetchDepartures()
+        try? await Task.sleep(nanoseconds: 200_000_000)
+
+        XCTAssertEqual(vm.walkingETAState, .ready)
+        XCTAssertEqual(vm.walkingTimeDisplayText, "3-4 min")
     }
 
     func testWalkingETA_PicksLongestWalkLeg() {
@@ -619,9 +746,8 @@ final class NuCoreTests: XCTestCase {
             .init(durationSeconds: 240, distanceMeters: 320)
         ])
         XCTAssertNotNil(summary)
-        // Current strategy sums all WALK legs to avoid underestimating when first leg is only an in-station segment.
-        XCTAssertEqual(summary?.totalDurationSeconds, 360)
-        XCTAssertEqual(summary?.totalDistanceMeters, 480)
+        XCTAssertEqual(summary?.totalDurationSeconds, 240)
+        XCTAssertEqual(summary?.totalDistanceMeters, 320)
     }
 
     func testWalkingETA_SkyttegadeTripChainAndCache() async throws {
@@ -658,16 +784,166 @@ final class NuCoreTests: XCTestCase {
         let session = URLSession(configuration: config)
         let service = WalkingETAService(
             client: HafasClient(session: session),
-            apiService: MockIntegrationAPIService()
+            apiService: MockIntegrationAPIService(),
+            mapKitService: MockMapKitWalkingETAService(result: nil),
+            overheadSeconds: 45
         )
         let origin = CLLocationCoordinate2D(latitude: 55.6871, longitude: 12.5458)
 
-        let first = try await service.fetchWalkETA(origin: origin, destStopId: "skyttegade-entrance")
-        let second = try await service.fetchWalkETA(origin: origin, destStopId: "skyttegade-entrance")
+        let destination = WalkingETADestination(
+            stopId: "skyttegade-entrance",
+            name: "Skyttegade",
+            groupId: "group-skyttegade",
+            latitude: 55.6872,
+            longitude: 12.5459,
+            mode: .bus,
+            isRecommended: true
+        )
+        let first = try await service.fetchWalkETA(
+            origin: origin,
+            destination: destination,
+            locationAccuracy: 20,
+            locationAgeSeconds: 1
+        )
+        let second = try await service.fetchWalkETA(
+            origin: origin,
+            destination: destination,
+            locationAccuracy: 20,
+            locationAgeSeconds: 1
+        )
 
-        XCTAssertEqual(first.minutes, 6, "2min + 4min WALK legs should sum to 6min")
+        XCTAssertEqual(first.minutes, 6, "Should apply dynamic conservative buffer after picking the main WALK leg")
         XCTAssertEqual(second.minutes, 6, "Second fetch should return cached value")
         XCTAssertEqual(URLProtocolMock.requestCount, 1, "Second fetch should hit in-memory cache")
+    }
+
+    func testWalkingETA_FinalNotLowerThanMapKit() async throws {
+        URLProtocolMock.requestCount = 0
+        URLProtocolMock.testData = """
+        {
+          "TripList": {
+            "Trip": [{
+              "LegList": {
+                "Leg": [{
+                  "type": "WALK",
+                  "duration": "00:04:00",
+                  "dist": 320,
+                  "Origin": { "name": "A" },
+                  "Destination": { "name": "B" }
+                }]
+              }
+            }]
+          }
+        }
+        """.data(using: .utf8)
+
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [URLProtocolMock.self]
+        let session = URLSession(configuration: config)
+        let service = WalkingETAService(
+            client: HafasClient(session: session),
+            apiService: MockIntegrationAPIService(),
+            mapKitService: MockMapKitWalkingETAService(result: .init(expectedSeconds: 600, distanceMeters: 700)),
+            overheadSeconds: 45
+        )
+
+        let eta = try await service.fetchWalkETA(
+            origin: CLLocationCoordinate2D(latitude: 55.6871, longitude: 12.5458),
+            destination: WalkingETADestination(
+                stopId: "skyttegade-entrance",
+                name: "Skyttegade",
+                groupId: "group-skyttegade",
+                latitude: 55.6872,
+                longitude: 12.5459,
+                mode: .bus,
+                isRecommended: true
+            ),
+            locationAccuracy: 25,
+            locationAgeSeconds: 1
+        )
+
+        XCTAssertGreaterThanOrEqual(eta.minutes, 10, "Final ETA must not be lower than mapkit baseline")
+    }
+
+    @MainActor
+    func testJourneyDetailZonesVisibleOnEveryStopRow() async {
+        let vm = JourneyDetailViewModel()
+        let service = MockIntegrationAPIService(
+            journeyDetailResult: JourneyDetail(stops: [
+                JourneyStop(
+                    id: "start",
+                    name: "Start",
+                    arrTime: nil,
+                    depTime: "10:00",
+                    track: nil
+                ),
+                JourneyStop(
+                    id: nil,
+                    name: "Gennemkzone 0010",
+                    arrTime: nil,
+                    depTime: nil,
+                    track: nil,
+                    zone: "0010"
+                ),
+                JourneyStop(
+                    id: "mid",
+                    name: "Middle",
+                    arrTime: "10:06",
+                    depTime: "10:07",
+                    track: nil
+                ),
+                JourneyStop(
+                    id: nil,
+                    name: "Gennemkzone 000200002",
+                    arrTime: nil,
+                    depTime: nil,
+                    track: nil
+                ),
+                JourneyStop(
+                    id: "end",
+                    name: "End",
+                    arrTime: "10:12",
+                    depTime: nil,
+                    track: nil
+                )
+            ])
+        )
+
+        await vm.load(
+            journeyID: "journey",
+            operationDate: "2026-02-13",
+            fallbackStops: [],
+            currentStopName: "Start",
+            apiService: service
+        )
+
+        XCTAssertEqual(vm.rows.first?.zoneBadgeText, "Zone 10")
+        XCTAssertEqual(vm.rows.dropFirst().first?.zoneBadgeText, "Zone 10")
+        XCTAssertEqual(vm.rows.last?.zoneBadgeText, "Zone 10→02")
+        XCTAssertTrue(vm.rows.allSatisfy { $0.zoneBadgeText != nil || $0.zoneCode != nil })
+    }
+
+    @MainActor
+    func testJourneyDetailNoZoneDataLeavesAllRowsWithoutZone() async {
+        let vm = JourneyDetailViewModel()
+        let service = MockIntegrationAPIService(
+            journeyDetailResult: JourneyDetail(stops: [
+                JourneyStop(id: "a", name: "Stop A", arrTime: "10:00", depTime: "10:01", track: nil),
+                JourneyStop(id: "b", name: "Stop B", arrTime: "10:05", depTime: "10:06", track: nil),
+                JourneyStop(id: "c", name: "Stop C", arrTime: "10:11", depTime: nil, track: nil)
+            ])
+        )
+
+        await vm.load(
+            journeyID: "journey-no-zone",
+            operationDate: "2026-02-14",
+            fallbackStops: [],
+            currentStopName: "Stop A",
+            apiService: service
+        )
+
+        XCTAssertTrue(vm.rows.allSatisfy { $0.zoneCode == nil })
+        XCTAssertTrue(vm.rows.allSatisfy { $0.zoneBadgeText == nil })
     }
 
     @MainActor
@@ -786,6 +1062,7 @@ private final class MockLocationManager: LocationManaging {
 private struct MockIntegrationAPIService: APIServiceProtocol {
     var nearbyStopsResult: [StationModel] = []
     var departuresResult: [Departure] = []
+    var journeyDetailResult: JourneyDetail = JourneyDetail(stops: [])
 
     func fetchNearbyStops(coordX: Double, coordY: Double, radiusMeters: Int?, maxNo: Int?) async throws -> [StationModel] {
         nearbyStopsResult
@@ -804,7 +1081,7 @@ private struct MockIntegrationAPIService: APIServiceProtocol {
     }
 
     func fetchJourneyDetail(id: String, date: String?) async throws -> JourneyDetail {
-        JourneyDetail(stops: [])
+        journeyDetailResult
     }
 }
 
@@ -815,8 +1092,45 @@ private final class MockWalkingETAService: WalkingETAServiceProtocol {
         self.result = result
     }
 
-    func fetchWalkETA(origin: CLLocationCoordinate2D, destStopId: String) async throws -> WalkETA {
+    func fetchWalkETA(
+        origin: CLLocationCoordinate2D,
+        destination: WalkingETADestination,
+        locationAccuracy: CLLocationAccuracy?,
+        locationAgeSeconds: TimeInterval?
+    ) async throws -> WalkETA {
         try result.get()
+    }
+}
+
+private actor TrackingWalkingETAService: WalkingETAServiceProtocol {
+    private(set) var lastDestination: WalkingETADestination?
+
+    func fetchWalkETA(
+        origin: CLLocationCoordinate2D,
+        destination: WalkingETADestination,
+        locationAccuracy: CLLocationAccuracy?,
+        locationAgeSeconds: TimeInterval?
+    ) async throws -> WalkETA {
+        lastDestination = destination
+        return WalkETA(minutes: 4, baseMinutes: 3, distanceMeters: 320, source: .hafasWalk)
+    }
+}
+
+private final class MockMapKitWalkingETAService: MapKitWalkingETAServiceProtocol {
+    private let result: MapKitWalkingETAResult?
+
+    init(result: MapKitWalkingETAResult?) {
+        self.result = result
+    }
+
+    func fetchWalkingETA(
+        origin: CLLocationCoordinate2D,
+        destination: CLLocationCoordinate2D
+    ) async throws -> MapKitWalkingETAResult {
+        guard let result else {
+            throw APIError.decodingFailed
+        }
+        return result
     }
 }
 

@@ -27,7 +27,7 @@ struct MainTabView: View {
             }
 
             NavigationStack {
-                MapView(apiService: RejseplanenAPIService())
+                MapView(apiService: RejseplanenAPIService(), locationManager: locationManager)
             }
             .tabItem {
                 Label(L10n.tr("tab.map"), systemImage: "map")

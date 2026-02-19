@@ -120,6 +120,12 @@ struct JourneyStop: Codable, Hashable {
     let rtTrack: String?
     let lat: Double?
     let lon: Double?
+    let zone: String?
+    let tariffZone: String?
+    let tariffZones: [String]?
+    let type: String?
+    let products: String?
+    let notes: [JourneyStopNote]?
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -138,6 +144,13 @@ struct JourneyStop: Codable, Hashable {
         case lon
         case x
         case y
+        case zone
+        case tariffZone
+        case zoneNo
+        case tariffZones
+        case type
+        case products
+        case notes = "Notes"
     }
 
     init(
@@ -153,7 +166,13 @@ struct JourneyStop: Codable, Hashable {
         track: String?,
         rtTrack: String? = nil,
         lat: Double? = nil,
-        lon: Double? = nil
+        lon: Double? = nil,
+        zone: String? = nil,
+        tariffZone: String? = nil,
+        tariffZones: [String]? = nil,
+        type: String? = nil,
+        products: String? = nil,
+        notes: [JourneyStopNote]? = nil
     ) {
         self.id = id
         self.name = name
@@ -168,6 +187,12 @@ struct JourneyStop: Codable, Hashable {
         self.rtTrack = rtTrack
         self.lat = lat
         self.lon = lon
+        self.zone = zone
+        self.tariffZone = tariffZone
+        self.tariffZones = tariffZones
+        self.type = type
+        self.products = products
+        self.notes = notes
     }
 
     init(from decoder: Decoder) throws {
@@ -198,6 +223,38 @@ struct JourneyStop: Codable, Hashable {
         } else {
             self.lon = nil
         }
+        if let zoneText = try? container.decode(String.self, forKey: .zone) {
+            zone = zoneText
+        } else if let zoneInt = try? container.decode(Int.self, forKey: .zone) {
+            zone = String(zoneInt)
+        } else if let zoneText = try? container.decode(String.self, forKey: .tariffZone) {
+            zone = zoneText
+        } else if let zoneInt = try? container.decode(Int.self, forKey: .tariffZone) {
+            zone = String(zoneInt)
+        } else if let zoneText = try? container.decode(String.self, forKey: .zoneNo) {
+            zone = zoneText
+        } else if let zoneInt = try? container.decode(Int.self, forKey: .zoneNo) {
+            zone = String(zoneInt)
+        } else {
+            zone = nil
+        }
+        if let text = try? container.decode(String.self, forKey: .tariffZone) {
+            tariffZone = text
+        } else if let value = try? container.decode(Int.self, forKey: .tariffZone) {
+            tariffZone = String(value)
+        } else {
+            tariffZone = nil
+        }
+        tariffZones = Self.decodeStringArray(container: container, key: .tariffZones)
+        type = try? container.decode(String.self, forKey: .type)
+        if let productsList = Self.decodeStringArray(container: container, key: .products), !productsList.isEmpty {
+            products = productsList.joined(separator: ",")
+        } else if let productsText = try? container.decode(String.self, forKey: .products) {
+            products = productsText
+        } else {
+            products = nil
+        }
+        notes = Self.decodeNotes(container: container, key: .notes)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -215,5 +272,65 @@ struct JourneyStop: Codable, Hashable {
         try container.encodeIfPresent(rtTrack, forKey: .rtTrack)
         try container.encodeIfPresent(lat, forKey: .lat)
         try container.encodeIfPresent(lon, forKey: .lon)
+        try container.encodeIfPresent(zone, forKey: .zone)
+        try container.encodeIfPresent(tariffZone, forKey: .tariffZone)
+        try container.encodeIfPresent(tariffZones, forKey: .tariffZones)
+        try container.encodeIfPresent(type, forKey: .type)
+        try container.encodeIfPresent(products, forKey: .products)
+    }
+
+    private static func decodeStringArray(
+        container: KeyedDecodingContainer<CodingKeys>,
+        key: CodingKeys
+    ) -> [String]? {
+        if let list = try? container.decode([String].self, forKey: key) {
+            return list
+        }
+        if let text = try? container.decode(String.self, forKey: key) {
+            return [text]
+        }
+        if let number = try? container.decode(Int.self, forKey: key) {
+            return [String(number)]
+        }
+        return nil
+    }
+
+    private static func decodeNotes(
+        container: KeyedDecodingContainer<CodingKeys>,
+        key: CodingKeys
+    ) -> [JourneyStopNote]? {
+        struct NoteContainer: Decodable {
+            let notes: [JourneyStopNote]
+            enum CodingKeys: String, CodingKey { case notes = "Note" }
+
+            init(from decoder: Decoder) throws {
+                let c = try decoder.container(keyedBy: CodingKeys.self)
+                if let list = try? c.decode([JourneyStopNote].self, forKey: .notes) {
+                    notes = list
+                } else if let single = try? c.decode(JourneyStopNote.self, forKey: .notes) {
+                    notes = [single]
+                } else {
+                    notes = []
+                }
+            }
+        }
+        if let wrapper = try? container.decode(NoteContainer.self, forKey: key) {
+            return wrapper.notes.isEmpty ? nil : wrapper.notes
+        }
+        return nil
+    }
+}
+
+struct JourneyStopNote: Codable, Hashable {
+    let key: String?
+    let value: String?
+    let type: String?
+    let textName: String?
+
+    enum CodingKeys: String, CodingKey {
+        case key
+        case value
+        case type
+        case textName = "txtN"
     }
 }

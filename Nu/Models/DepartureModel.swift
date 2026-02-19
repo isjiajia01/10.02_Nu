@@ -118,7 +118,7 @@ struct Departure: Codable, Identifiable, Hashable {
     let uncertaintyRange: UncertaintyRange
     let reliabilityScore: Double
     let catchProbability: Double?
-    let catchStatus: CatchStatus?
+    let catchBucket: CatchBucket?
 
     enum CodingKeys: String, CodingKey {
         case name
@@ -147,7 +147,7 @@ struct Departure: Codable, Identifiable, Hashable {
         case uncertaintyUpperBound
         case reliabilityScore
         case catchProbability
-        case catchStatus
+        case catchBucket
         case journeyDetailRef = "JourneyDetailRef"
     }
 
@@ -173,7 +173,7 @@ struct Departure: Codable, Identifiable, Hashable {
         uncertaintyRange: UncertaintyRange? = nil,
         reliabilityScore: Double = 0.6,
         catchProbability: Double? = nil,
-        catchStatus: CatchStatus? = nil
+        catchBucket: CatchBucket? = nil
     ) {
         self.journeyRef = journeyRef
         self.name = name
@@ -192,7 +192,7 @@ struct Departure: Codable, Identifiable, Hashable {
         self.uncertaintyRange = uncertaintyRange ?? Self.defaultUncertaintyRange(hasRealtime: rtTime != nil)
         self.reliabilityScore = min(max(reliabilityScore, 0), 1)
         self.catchProbability = catchProbability
-        self.catchStatus = catchStatus
+        self.catchBucket = catchBucket
     }
 
     init(from decoder: Decoder) throws {
@@ -254,12 +254,12 @@ struct Departure: Codable, Identifiable, Hashable {
 
         reliabilityScore = min(max((try? container.decode(Double.self, forKey: .reliabilityScore)) ?? 0.6, 0), 1)
         catchProbability = try? container.decode(Double.self, forKey: .catchProbability)
-        if let decodedStatus = try? container.decode(CatchStatus.self, forKey: .catchStatus) {
-            catchStatus = decodedStatus
-        } else if let rawStatus = try? container.decode(String.self, forKey: .catchStatus) {
-            catchStatus = CatchStatus(rawValue: rawStatus.lowercased())
+        if let decodedBucket = try? container.decode(CatchBucket.self, forKey: .catchBucket) {
+            catchBucket = decodedBucket
+        } else if let rawBucket = try? container.decode(String.self, forKey: .catchBucket) {
+            catchBucket = CatchBucket(rawValue: rawBucket.lowercased())
         } else {
-            catchStatus = nil
+            catchBucket = nil
         }
 
         if let detailRef = try? container.decode(JourneyDetailRef.self, forKey: .journeyDetailRef) {
@@ -289,7 +289,7 @@ struct Departure: Codable, Identifiable, Hashable {
         try container.encode(uncertaintyRange, forKey: .uncertaintyRange)
         try container.encode(reliabilityScore, forKey: .reliabilityScore)
         try container.encodeIfPresent(catchProbability, forKey: .catchProbability)
-        try container.encodeIfPresent(catchStatus, forKey: .catchStatus)
+        try container.encodeIfPresent(catchBucket, forKey: .catchBucket)
     }
 
     /// 是否晚点：当 `rtTime` 存在且与计划时间不同即视为晚点。
@@ -308,6 +308,33 @@ struct Departure: Codable, Identifiable, Hashable {
     /// 优先返回实时发车时间，否则返回计划时间。
     var effectiveTime: String {
         rtTime ?? time
+    }
+
+    /// The single source of truth for when this departure actually leaves.
+    ///
+    /// Priority:
+    /// 1. Realtime date+time (rtTime + rtDate/date) if parseable
+    /// 2. Scheduled date+time + delay offset (if delay is known but rt fields failed)
+    /// 3. Scheduled date+time as last resort
+    ///
+    /// Returns `(date, isRealtime)`.
+    var effectiveDepartureDate: (date: Date, isRealtime: Bool)? {
+        // 1) Try realtime fields first
+        if let rt = rtTime, !rt.isEmpty {
+            if let parsed = parseDate(date: rtDate ?? date, time: rt) {
+                return (parsed, true)
+            }
+        }
+        // 2) Fallback: scheduled + delay (covers case where rtTime parsing fails
+        //    but we know the delay from other signals)
+        if let scheduled = parseDate(date: date, time: time) {
+            if delayMinutes > 0 {
+                let adjusted = scheduled.addingTimeInterval(Double(delayMinutes) * 60)
+                return (adjusted, true)
+            }
+            return (scheduled, false)
+        }
+        return nil
     }
 
     /// 延误分钟数。无法计算时返回 0。

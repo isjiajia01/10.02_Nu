@@ -16,4 +16,5 @@ final class DiagnosticsStore: ObservableObject {
     func clearWarning() {
         latestWarning = nil
     }
+
 }

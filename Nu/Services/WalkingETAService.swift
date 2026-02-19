@@ -1,20 +1,20 @@
 import Foundation
 import CoreLocation
 
-actor WalkingETAService: WalkingETAServiceProtocol {
+final class WalkingETAService: WalkingETAServiceProtocol {
     struct WalkLegMetric: Equatable {
         let durationSeconds: Int?
         let distanceMeters: Int?
     }
 
     private struct CacheKey: Hashable {
-        let destStopId: String
+        let destinationId: String
         let latBucket: Int
         let lonBucket: Int
         let timeBucket: Int
 
-        init(destStopId: String, coordinate: CLLocationCoordinate2D, timestamp: Date) {
-            self.destStopId = destStopId
+        init(destinationId: String, coordinate: CLLocationCoordinate2D, timestamp: Date) {
+            self.destinationId = destinationId
             let rounded = Self.roundedCoordinate(coordinate)
             self.latBucket = Int((rounded.latitude * 100_000).rounded())
             self.lonBucket = Int((rounded.longitude * 100_000).rounded())
@@ -36,109 +36,229 @@ actor WalkingETAService: WalkingETAServiceProtocol {
         let value: WalkETA
     }
 
+    private struct HafasWalkCandidate {
+        let seconds: Int
+        let distanceMeters: Int?
+        let legCount: Int
+        let selectedTripIdx: Int
+        let usedField: String
+    }
+
     private let client: HafasClient
     private let apiService: APIServiceProtocol
+    private let mapKitService: MapKitWalkingETAServiceProtocol?
     private let clock: ClockProtocol
+    private let overheadSeconds: Int
     private let cacheTTL: TimeInterval = 60
     private var cache: [CacheKey: CacheEntry] = [:]
+    private let cacheLock = NSLock()
 
     init(
         client: HafasClient = HafasClient(),
         apiService: APIServiceProtocol,
-        clock: ClockProtocol = SystemClock()
+        clock: ClockProtocol = SystemClock(),
+        mapKitService: MapKitWalkingETAServiceProtocol? = nil,
+        overheadSeconds: Int? = nil
     ) {
         self.client = client
         self.apiService = apiService
         self.clock = clock
+        self.mapKitService = mapKitService
+        self.overheadSeconds = max(0, overheadSeconds ?? AppConfig.walkETAOverheadSeconds)
     }
 
-    func fetchWalkETA(origin: CLLocationCoordinate2D, destStopId: String) async throws -> WalkETA {
-        let key = CacheKey(destStopId: destStopId, coordinate: origin, timestamp: clock.now)
-        log("[WalkETA] origin=(\(origin.latitude),\(origin.longitude)) dest=\(destStopId)")
+    func fetchWalkETA(
+        origin: CLLocationCoordinate2D,
+        destination: WalkingETADestination,
+        locationAccuracy: CLLocationAccuracy?,
+        locationAgeSeconds: TimeInterval?
+    ) async throws -> WalkETA {
+        let key = CacheKey(destinationId: destination.stopId, coordinate: origin, timestamp: clock.now)
 
-        if let cached = cache[key], clock.now.timeIntervalSince(cached.timestamp) <= cacheTTL {
-            log("[WalkETA][cache] HIT key=\(cacheKeyDescription(key)) minutes=\(cached.value.minutes) source=\(cached.value.source)")
+        if let cached = cachedValue(for: key), clock.now.timeIntervalSince(cached.timestamp) <= cacheTTL {
+            logStructured(
+                origin: origin,
+                destination: destination,
+                locationAccuracy: locationAccuracy,
+                locationAgeSeconds: locationAgeSeconds,
+                hafasCandidate: nil,
+                mapKitCandidate: nil,
+                mapKitError: nil,
+                model: nil,
+                finalSource: cached.value.source,
+                cacheStatus: "HIT"
+            )
             return cached.value
         }
-        log("[WalkETA][cache] MISS key=\(cacheKeyDescription(key))")
 
-        do {
-            let walkETA = try await fetchFromTrip(origin: origin, destStopId: destStopId)
-            cache[key] = CacheEntry(timestamp: clock.now, value: walkETA)
-            log("[WalkETA] source=\(walkETA.source) cache=MISS minutes=\(walkETA.minutes)")
-            return walkETA
-        } catch {
-            if let fallback = try await fetchFallback(origin: origin, destStopId: destStopId) {
-                cache[key] = CacheEntry(timestamp: clock.now, value: fallback)
-                log("[WalkETA] source=\(fallback.source) cache=MISS minutes=\(fallback.minutes)")
-                return fallback
-            }
-            throw error
+        let hafasCandidate = await fetchHafasCandidate(origin: origin, destination: destination)
+        let mapKitResult = await fetchMapKitCandidate(origin: origin, destination: destination)
+        let mapKitCandidate = mapKitResult.result
+        let baseSeconds = max(hafasCandidate?.seconds ?? 0, mapKitCandidate?.expectedSeconds ?? 0)
+
+        if baseSeconds > 0 {
+            let routeDistance = max(hafasCandidate?.distanceMeters ?? 0, mapKitCandidate?.distanceMeters ?? 0)
+            let model = applyConservativeModel(
+                baseSeconds: baseSeconds,
+                routeDistanceMeters: routeDistance > 0 ? routeDistance : nil,
+                locationAccuracy: locationAccuracy
+            )
+            let minutes = max(1, Int(ceil(Double(model.finalSeconds) / 60.0)))
+            let final = WalkETA(
+                minutes: minutes,
+                baseMinutes: Int(ceil(Double(baseSeconds) / 60.0)),
+                distanceMeters: routeDistance > 0 ? routeDistance : nil,
+                source: .hafasWalk
+            )
+            cacheValue(CacheEntry(timestamp: clock.now, value: final), for: key)
+            logStructured(
+                origin: origin,
+                destination: destination,
+                locationAccuracy: locationAccuracy,
+                locationAgeSeconds: locationAgeSeconds,
+                hafasCandidate: hafasCandidate,
+                mapKitCandidate: mapKitCandidate,
+                mapKitError: mapKitResult.errorText,
+                model: model,
+                finalSource: .hafasWalk,
+                cacheStatus: "MISS"
+            )
+            return final
         }
+
+        if let fallback = try await fetchFallback(origin: origin, destination: destination) {
+            cacheValue(CacheEntry(timestamp: clock.now, value: fallback), for: key)
+            logStructured(
+                origin: origin,
+                destination: destination,
+                locationAccuracy: locationAccuracy,
+                locationAgeSeconds: locationAgeSeconds,
+                hafasCandidate: hafasCandidate,
+                mapKitCandidate: mapKitCandidate,
+                mapKitError: mapKitResult.errorText,
+                model: nil,
+                finalSource: .estimatedFallback,
+                cacheStatus: "MISS"
+            )
+            return fallback
+        }
+
+        WalkETADebugLogger.log("failure reason=noHafasNoMapKitNoFallback")
+        throw APIError.decodingFailed
     }
 
-    private func fetchFromTrip(origin: CLLocationCoordinate2D, destStopId: String) async throws -> WalkETA {
-        let response: HafasResponse<TripResponse> = try await client.request(
-            service: .trip,
-            queryItems: [
-                URLQueryItem(name: "originCoordLat", value: String(origin.latitude)),
-                URLQueryItem(name: "originCoordLong", value: String(origin.longitude)),
-                URLQueryItem(name: "destId", value: destStopId),
-                URLQueryItem(name: "ivOnly", value: "1"),
-                URLQueryItem(name: "totalWalk", value: "1"),
-                URLQueryItem(name: "maxNo", value: "1")
-            ],
-            context: HafasRequestContext(context: [
-                "feature": "walkETA",
-                "destStopId": destStopId
-            ])
-        )
-        if let requestURL = try? client.makeURL(service: .trip, queryItems: [
+    private func fetchHafasCandidate(origin: CLLocationCoordinate2D, destination: WalkingETADestination) async -> HafasWalkCandidate? {
+        var queryItems = [
             URLQueryItem(name: "originCoordLat", value: String(origin.latitude)),
             URLQueryItem(name: "originCoordLong", value: String(origin.longitude)),
-            URLQueryItem(name: "destId", value: destStopId),
+            URLQueryItem(name: "destId", value: destination.stopId),
             URLQueryItem(name: "ivOnly", value: "1"),
             URLQueryItem(name: "totalWalk", value: "1"),
-            URLQueryItem(name: "maxNo", value: "1")
-        ]) {
-            log("[WalkETA] request=\(requestURL.absoluteString)")
+            URLQueryItem(name: "maxNo", value: "3")
+        ]
+        if let coord = destination.coordinate {
+            queryItems.append(URLQueryItem(name: "destCoordLat", value: String(coord.latitude)))
+            queryItems.append(URLQueryItem(name: "destCoordLong", value: String(coord.longitude)))
+        }
+        if let requestURL = try? client.makeURL(service: .trip, queryItems: queryItems) {
+            WalkETADebugLogger.log("hafas request=\(requestURL.absoluteString)")
         }
 
-        guard let trip = response.value.trips.first else {
-            throw APIError.decodingFailed
-        }
+        do {
+            let response: HafasResponse<TripResponse> = try await client.request(
+                service: .trip,
+                queryItems: queryItems,
+                context: HafasRequestContext(context: [
+                    "feature": "walkETA",
+                    "destStopId": destination.stopId
+                ])
+            )
 
-        let walkLegs = trip.legs.filter { leg in
-            guard let type = leg.type?.uppercased() else { return false }
-            return type.contains("WALK") || type.contains("FOOT")
-        }
-        log("[WalkETA] legs:")
-        for leg in walkLegs {
-            let durText = leg.durationSeconds.map(String.init) ?? "nil"
-            let distText = leg.distanceMeters.map(String.init) ?? "nil"
-            log("  - \(leg.type ?? "nil") durS=\(durText) dist=\(distText) from=\(leg.originName ?? "?") to=\(leg.destinationName ?? "?")")
-        }
+            if response.value.trips.isEmpty {
+                WalkETADebugLogger.log("hafas failure reason=tripListEmpty")
+                return nil
+            }
 
-        guard !walkLegs.isEmpty else {
-            throw APIError.decodingFailed
+            var selectedTripIndex: Int?
+            var selectedSummary: (totalDurationSeconds: Int, totalDistanceMeters: Int?, usedField: String)?
+            var selectedLegCount = 0
+            var totalWalkLegCount = 0
+
+            for (index, trip) in response.value.trips.enumerated() {
+                let walkLegs = trip.legs.filter { leg in
+                    guard let type = leg.type?.uppercased() else { return false }
+                    return type.contains("WALK") || type.contains("FOOT")
+                }
+                totalWalkLegCount += walkLegs.count
+                for leg in walkLegs {
+                    let durText = leg.durationSeconds.map(String.init) ?? "nil"
+                    let distText = leg.distanceMeters.map(String.init) ?? "nil"
+                    WalkETADebugLogger.log("hafas leg tripIdx=\(index) durS=\(durText) distM=\(distText) from=\(leg.originName ?? "?") to=\(leg.destinationName ?? "?")")
+                }
+
+                let metrics = walkLegs.map { WalkLegMetric(durationSeconds: $0.durationSeconds, distanceMeters: $0.distanceMeters) }
+                if let summary = Self.selectWalkingSummary(from: metrics) {
+                    selectedTripIndex = index
+                    selectedSummary = summary
+                    selectedLegCount = walkLegs.count
+                    break
+                }
+            }
+
+            guard let summary = selectedSummary, let selectedTripIndex else {
+                WalkETADebugLogger.log("hafas failure reason=noWalkLeg tripCount=\(response.value.trips.count) walkLegCount=\(totalWalkLegCount)")
+                return nil
+            }
+
+            return HafasWalkCandidate(
+                seconds: summary.totalDurationSeconds,
+                distanceMeters: summary.totalDistanceMeters,
+                legCount: selectedLegCount,
+                selectedTripIdx: selectedTripIndex,
+                usedField: summary.usedField
+            )
+        } catch {
+            if let apiError = error as? APIError {
+                switch apiError {
+                case .httpStatus(let status):
+                    WalkETADebugLogger.log("hafas failure reason=httpStatus status=\(status)")
+                case .decodingFailed:
+                    WalkETADebugLogger.log("hafas failure reason=decodeError")
+                case .serverMessage(let message):
+                    WalkETADebugLogger.log("hafas failure reason=serverMessage detail=\(message)")
+                case .network(let wrapped):
+                    WalkETADebugLogger.log("hafas failure reason=network detail=\(wrapped.localizedDescription)")
+                default:
+                    WalkETADebugLogger.log("hafas failure reason=apiError detail=\(apiError.localizedDescription)")
+                }
+            } else {
+                WalkETADebugLogger.log("hafas failure reason=requestError detail=\(error.localizedDescription)")
+            }
+            return nil
         }
-
-        let metrics = walkLegs.map { WalkLegMetric(durationSeconds: $0.durationSeconds, distanceMeters: $0.distanceMeters) }
-        guard let summary = Self.selectWalkingSummary(from: metrics) else {
-            throw APIError.decodingFailed
-        }
-
-        let minutes = max(1, Int(ceil(Double(summary.totalDurationSeconds) / 60.0)))
-        log("[WalkETA] chosenDurS=\(summary.totalDurationSeconds) chosenDist=\(summary.totalDistanceMeters?.description ?? "nil") => minutes=\(minutes)")
-
-        return WalkETA(
-            minutes: minutes,
-            distanceMeters: summary.totalDistanceMeters,
-            source: .hafasWalk
-        )
     }
 
-    private func fetchFallback(origin: CLLocationCoordinate2D, destStopId: String) async throws -> WalkETA? {
+    private func fetchMapKitCandidate(
+        origin: CLLocationCoordinate2D,
+        destination: WalkingETADestination
+    ) async -> (result: MapKitWalkingETAResult?, errorText: String?) {
+        guard let destinationCoord = destination.coordinate else {
+            return (nil, "missingDestinationCoord")
+        }
+        let service: MapKitWalkingETAServiceProtocol
+        if let mapKitService {
+            service = mapKitService
+        } else {
+            service = await MainActor.run { MapKitWalkingETAService() as MapKitWalkingETAServiceProtocol }
+        }
+        do {
+            return (try await service.fetchWalkingETA(origin: origin, destination: destinationCoord), nil)
+        } catch {
+            return (nil, error.localizedDescription)
+        }
+    }
+
+    private func fetchFallback(origin: CLLocationCoordinate2D, destination: WalkingETADestination) async throws -> WalkETA? {
         let nearby = try await apiService.fetchNearbyStops(
             coordX: origin.longitude,
             coordY: origin.latitude,
@@ -147,40 +267,136 @@ actor WalkingETAService: WalkingETAServiceProtocol {
         )
 
         guard let station = nearby.first(where: { station in
-            station.id == destStopId || station.extId == destStopId || station.globalId == destStopId
+            station.id == destination.stopId || station.extId == destination.stopId || station.globalId == destination.stopId
         }), let distance = station.distanceMeters else {
+            WalkETADebugLogger.log("failure reason=noFallbackDistance")
             return nil
         }
 
-        let minutes = max(1, Int(ceil(distance / 1.3 / 60.0)))
-
+        let conservativeMinutes = max(1, Int(ceil(distance / 1.1 / 60.0)))
         return WalkETA(
-            minutes: minutes,
+            minutes: conservativeMinutes,
+            baseMinutes: nil,
             distanceMeters: Int(distance.rounded()),
             source: .estimatedFallback
         )
     }
 
-    static func selectWalkingSummary(from walkLegs: [WalkLegMetric]) -> (totalDurationSeconds: Int, totalDistanceMeters: Int?)? {
-        let withDuration = walkLegs.compactMap { leg -> (Int, Int?)? in
+    nonisolated static func selectWalkingSummary(from walkLegs: [WalkLegMetric]) -> (totalDurationSeconds: Int, totalDistanceMeters: Int?, usedField: String)? {
+        let withDuration = walkLegs.compactMap { leg -> (Int, Int?, String)? in
             guard let duration = leg.durationSeconds, duration > 0 else { return nil }
-            return (duration, leg.distanceMeters)
+            return (duration, leg.distanceMeters, "durS")
         }
         guard !withDuration.isEmpty else { return nil }
 
-        let totalDuration = withDuration.reduce(0) { $0 + $1.0 }
-        let totalDistance = withDuration.compactMap(\.1).reduce(0, +)
-        return (totalDuration, totalDistance > 0 ? totalDistance : nil)
+        let filtered = withDuration.filter { duration, distance, _ in
+            if duration <= 30 { return false }
+            if let distance, distance <= 20 { return false }
+            return true
+        }
+        let candidates = filtered.isEmpty ? withDuration : filtered
+        guard let selected = candidates.max(by: { $0.0 < $1.0 }) else { return nil }
+        return (selected.0, selected.1, selected.2)
+    }
+
+    private func applyConservativeModel(
+        baseSeconds: Int,
+        routeDistanceMeters: Int?,
+        locationAccuracy: CLLocationAccuracy?
+    ) -> (
+        baseSeconds: Int,
+        gpsBufferSeconds: Int,
+        intersectionBufferSeconds: Int,
+        accPenaltySeconds: Int,
+        multiplier: Double,
+        finalSeconds: Int
+    ) {
+        let dist = routeDistanceMeters ?? 0
+        let multiplier: Double
+        if dist < 250 {
+            multiplier = 1.20
+        } else if dist < 600 {
+            multiplier = 1.12
+        } else {
+            multiplier = 1.05
+        }
+
+        let accuracy = max(0, locationAccuracy ?? 0)
+        let accPenalty = Int(ceil(max(0, accuracy - 20.0)))
+        let intersectionBuffer = Int(ceil(Double(dist) / 250.0)) * 10
+        let rawBuffer = overheadSeconds + intersectionBuffer + accPenalty
+        let clampedBuffer = min(max(rawBuffer, 20), 90)
+        let scaled = Int(ceil(Double(baseSeconds) * multiplier))
+        let finalSeconds = max(baseSeconds, scaled + clampedBuffer)
+        return (baseSeconds, clampedBuffer, intersectionBuffer, accPenalty, multiplier, finalSeconds)
+    }
+
+    private func logStructured(
+        origin: CLLocationCoordinate2D,
+        destination: WalkingETADestination,
+        locationAccuracy: CLLocationAccuracy?,
+        locationAgeSeconds: TimeInterval?,
+        hafasCandidate: HafasWalkCandidate?,
+        mapKitCandidate: MapKitWalkingETAResult?,
+        mapKitError: String?,
+        model: (
+            baseSeconds: Int,
+            gpsBufferSeconds: Int,
+            intersectionBufferSeconds: Int,
+            accPenaltySeconds: Int,
+            multiplier: Double,
+            finalSeconds: Int
+        )?,
+        finalSource: WalkETASource?,
+        cacheStatus: String
+    ) {
+        let destSource: String
+        if destination.coordinate != nil {
+            destSource = "entrance"
+        } else if !destination.stopId.isEmpty {
+            destSource = "stop"
+        } else {
+            destSource = "fallback"
+        }
+        let destText: String
+        if let coord = destination.coordinate {
+            destText = "(\(coord.latitude),\(coord.longitude),source=\(destSource))"
+        } else {
+            destText = "nil"
+        }
+
+        let hafas = "hafas(durS=\(hafasCandidate?.seconds.description ?? "nil"),distM=\(hafasCandidate?.distanceMeters?.description ?? "nil"),legCount=\(hafasCandidate?.legCount ?? 0),used=\(hafasCandidate?.usedField ?? "none"))"
+        let mapkit = "mapkit(expectedS=\(mapKitCandidate?.expectedSeconds.description ?? "nil"),distM=\(mapKitCandidate?.distanceMeters?.description ?? "nil"),used=\(mapKitCandidate != nil),err=\(mapKitError ?? (mapKitCandidate == nil ? "n/a" : "none")))"
+
+        let modelText: String
+        if let model {
+            let finalMin = Int(ceil(Double(model.finalSeconds) / 60.0))
+            modelText = "model(baseS=\(model.baseSeconds),bufferS=\(model.gpsBufferSeconds),intersectionS=\(model.intersectionBufferSeconds),accPenaltyS=\(model.accPenaltySeconds),multiplier=\(String(format: "%.2f", model.multiplier)),finalS=\(model.finalSeconds),finalMin=\(finalMin),mode=\(finalSource == .estimatedFallback ? "fallback" : "auto"))"
+        } else {
+            modelText = "model(baseS=nil,bufferS=nil,multiplier=nil,finalS=nil,finalMin=nil,mode=\(finalSource == .estimatedFallback ? "fallback" : "auto"))"
+        }
+
+        WalkETADebugLogger.log(
+            "origin(\(origin.latitude),\(origin.longitude),accMeters=\(Int(locationAccuracy ?? -1)),timestamp=\(Int(locationAgeSeconds ?? -1))) " +
+            "chosenMode=\(destination.mode.rawValue) destGroupId=\(destination.groupId ?? "nil"),chosenStopPointId=\(destination.stopId),dest=\(destText) " +
+            "\(hafas) \(mapkit) \(modelText) cache=\(cacheStatus)"
+        )
     }
 
     private func cacheKeyDescription(_ key: CacheKey) -> String {
-        "dest=\(key.destStopId)|lat=\(key.latBucket)|lon=\(key.lonBucket)|tb=\(key.timeBucket)"
+        "dest=\(key.destinationId)|lat=\(key.latBucket)|lon=\(key.lonBucket)|tb=\(key.timeBucket)"
     }
 
-    private func log(_ message: String) {
-        #if DEBUG
-        fputs("\(message)\n", stderr)
-        #endif
+    private func cachedValue(for key: CacheKey) -> CacheEntry? {
+        cacheLock.lock()
+        defer { cacheLock.unlock() }
+        return cache[key]
+    }
+
+    private func cacheValue(_ value: CacheEntry, for key: CacheKey) {
+        cacheLock.lock()
+        cache[key] = value
+        cacheLock.unlock()
     }
 }
 
@@ -192,7 +408,7 @@ private struct TripResponse: Decodable {
         case trip = "Trip"
     }
 
-    init(from decoder: Decoder) throws {
+    nonisolated init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
 
         if let list = try? container.decode(TripListContainer.self, forKey: .tripList) {
@@ -220,7 +436,7 @@ private struct TripListContainer: Decodable {
         case trip = "Trip"
     }
 
-    init(from decoder: Decoder) throws {
+    nonisolated init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         if let list = try? container.decode([TripItem].self, forKey: .trip) {
             trips = list
@@ -240,7 +456,7 @@ private struct TripItem: Decodable {
         case leg = "Leg"
     }
 
-    init(from decoder: Decoder) throws {
+    nonisolated init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
 
         if let legList = try? container.decode(LegListContainer.self, forKey: .legList) {
@@ -269,7 +485,7 @@ private struct LegListContainer: Decodable {
         case leg = "Leg"
     }
 
-    init(from decoder: Decoder) throws {
+    nonisolated init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         if let list = try? container.decode([TripLeg].self, forKey: .leg) {
             legs = list
@@ -288,7 +504,7 @@ private struct TripLeg: Decodable {
     let originName: String?
     let destinationName: String?
     let durationSeconds: Int?
-    var distanceMeters: Int? { gisRoute?.dist ?? dist }
+    nonisolated var distanceMeters: Int? { gisRoute?.dist ?? dist }
 
     enum CodingKeys: String, CodingKey {
         case type
@@ -300,7 +516,7 @@ private struct TripLeg: Decodable {
         case rtDuration = "rtDuration"
     }
 
-    init(from decoder: Decoder) throws {
+    nonisolated init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         type = try? container.decode(String.self, forKey: .type)
         gisRoute = try? container.decode(GisRoute.self, forKey: .gisRoute)
@@ -322,7 +538,7 @@ private struct TripLeg: Decodable {
         }
     }
 
-    private static func decodeDurationSeconds(
+    private nonisolated static func decodeDurationSeconds(
         container: KeyedDecodingContainer<CodingKeys>,
         key: CodingKeys
     ) -> Int? {
@@ -335,7 +551,7 @@ private struct TripLeg: Decodable {
         return nil
     }
 
-    private static func parseDurationString(_ value: String) -> Int? {
+    private nonisolated static func parseDurationString(_ value: String) -> Int? {
         let clean = value.trimmingCharacters(in: .whitespacesAndNewlines)
         if clean.isEmpty { return nil }
         if let raw = Int(clean) {
@@ -369,7 +585,7 @@ private struct GisRoute: Decodable {
         case dist
     }
 
-    init(from decoder: Decoder) throws {
+    nonisolated init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
 
         if let value = try? container.decode(Int.self, forKey: .durS) {

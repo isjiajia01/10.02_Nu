@@ -1,15 +1,20 @@
 import SwiftUI
 
-/// Apple 原生现代风发车卡片（类似 Apple Maps / Wallet 的干净材质感）。
+/// Apple-native departure card (clean material style like Apple Maps / Wallet).
+///
+/// Right side shows: single countdown number + CatchBucket pill + optional %.
+/// No ETA interval range is displayed on the card.
 struct GlassDepartureCard: View {
     private let departure: Departure
     private let catchProbabilityText: String?
+    private let directionText: String?
+    private let directionStyle: DepartureBoardViewModel.DirectionChipStyle
     @ScaledMetric(relativeTo: .title3) private var lineBadgeSize: CGFloat = 54
     @ScaledMetric(relativeTo: .title2) private var lineCodeFontSize: CGFloat = 20
 
     var body: some View {
         HStack(alignment: .center, spacing: 16) {
-            // 1. 左侧：线路号（交通路牌风格）。
+            // 1. Left: line badge.
             ZStack {
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
                     .fill(getLineColor(type: departure.type, name: departure.name))
@@ -34,12 +39,18 @@ struct GlassDepartureCard: View {
             }
             .accessibilityHidden(true)
 
-            // 2. 中间：方向与状态。
+            // 2. Center: direction chip + destination & status.
             VStack(alignment: .leading, spacing: 4) {
+                if let directionText {
+                    DirectionChip(text: directionText, style: directionStyle)
+                }
+
                 Text(departure.direction)
                     .font(.headline.weight(.semibold))
                     .foregroundStyle(.primary)
-                    .lineLimit(1)
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.9)
+                    .truncationMode(.tail)
 
                 HStack(spacing: 4) {
                     if departure.isDelayed {
@@ -78,7 +89,7 @@ struct GlassDepartureCard: View {
 
             Spacer(minLength: 0)
 
-            // 3. 右侧：区间倒计时 + 可靠性信号。
+            // 3. Right: single countdown + catch bucket pill + optional %.
             VStack(alignment: .trailing, spacing: 4) {
                 HStack(spacing: 6) {
                     Image(systemName: "antenna.radiowaves.left.and.right")
@@ -86,20 +97,20 @@ struct GlassDepartureCard: View {
                         .foregroundStyle(reliabilityColor)
                         .accessibilityHidden(true)
 
-                    Text(intervalMainText)
+                    Text(countdownText)
                         .font(.title2.weight(.bold))
                         .monospacedDigit()
                         .foregroundStyle(reliabilityColor)
-                        .frame(minWidth: 56, alignment: .trailing)
+                        .frame(minWidth: 36, alignment: .trailing)
                 }
                 if showsMinuteUnit {
                     Text(L10n.tr("common.min"))
                         .font(.caption.weight(.medium))
                         .foregroundStyle(.secondary)
                 }
-                if let status = departure.catchStatus {
+                if let bucket = departure.catchBucket {
                     HStack(spacing: 6) {
-                        DecisionPill(status: status)
+                        CatchBucketPill(bucket: bucket)
                         if let catchProbabilityText {
                             Text(catchProbabilityText)
                                 .font(.caption2.weight(.medium))
@@ -125,56 +136,39 @@ struct GlassDepartureCard: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(departure.accessibilitySummary)
         .accessibilityValue(accessibilityReliabilityText)
-        .accessibilityHint(L10n.tr("departures.card.accessibility.hint", intervalMainText))
+        .accessibilityHint(L10n.tr("departures.card.accessibility.hint", countdownText))
     }
 
-    init(departure: Departure, catchProbabilityText: String? = nil) {
+    init(
+        departure: Departure,
+        catchProbabilityText: String? = nil,
+        directionText: String? = nil,
+        directionStyle: DepartureBoardViewModel.DirectionChipStyle = .filled
+    ) {
         self.departure = departure
         self.catchProbabilityText = catchProbabilityText
+        self.directionText = directionText
+        self.directionStyle = directionStyle
     }
 
-    /// 右侧主文案：显示 "4-7" 这种区间格式。
-    private var intervalMainText: String {
-        guard let interval = minuteIntervalRaw else { return "--" }
-
-        // 整个区间都在过去：车辆已走。
-        if interval.upper < 0 {
+    /// Single countdown number (no interval range).
+    private var countdownText: String {
+        guard let minutes = departure.minutesUntilDepartureRaw else { return "--" }
+        if minutes < 0 {
             return L10n.tr("departures.interval.departed")
         }
-        // 只要区间触及当前时刻，统一显示“Nu”，避免出现负数或“Nu-2”。
-        if interval.lower <= 0 {
+        if minutes == 0 {
             return L10n.tr("departures.interval.now")
         }
-
-        let lower = Int(floor(interval.lower))
-        let upper = Int(ceil(interval.upper))
-
-        if lower == upper {
-            return "\(lower)"
-        }
-        return "\(lower)-\(upper)"
+        return "\(minutes)"
     }
 
     private var showsMinuteUnit: Bool {
-        intervalMainText != L10n.tr("departures.interval.now")
-            && intervalMainText != L10n.tr("departures.interval.departed")
-            && intervalMainText != "--"
+        countdownText != L10n.tr("departures.interval.now")
+            && countdownText != L10n.tr("departures.interval.departed")
+            && countdownText != "--"
     }
 
-    /// 使用 baseETA + uncertaintyRange 计算区间（单位：分钟，允许负值用于判断“已发车”）。
-    private var minuteIntervalRaw: (lower: Double, upper: Double)? {
-        guard let baseMinutes = departure.minutesUntilDepartureRaw else { return nil }
-
-        let lowerValue = Double(baseMinutes) + departure.uncertaintyRange.lowerBound
-        let upperValue = Double(baseMinutes) + departure.uncertaintyRange.upperBound
-
-        return (min(lowerValue, upperValue), max(lowerValue, upperValue))
-    }
-
-    /// 可靠性颜色分段：
-    /// - > 0.8: 绿色
-    /// - 0.5...0.8: 橙色
-    /// - < 0.5: 灰色
     private var reliabilityColor: Color {
         ReliabilitySignal(score: departure.reliabilityScore).color
     }
@@ -210,23 +204,16 @@ struct GlassDepartureCard: View {
         return L10n.tr("departures.track.changed", track, rtTrack)
     }
 
-    /// 类型角标。
     private var typeBadge: String {
         switch departure.type {
-        case "BUS":
-            return "BUS"
-        case "METRO":
-            return "M"
-        case "TRAM":
-            return "TRAM"
-        case "FERRY":
-            return "F"
-        default:
-            return "TOG"
+        case "BUS":   return "BUS"
+        case "METRO": return "M"
+        case "TRAM":  return "TRAM"
+        case "FERRY": return "F"
+        default:      return "TOG"
         }
     }
 
-    /// 线路显示：清理名称前缀（Bus/Metro/Tog）。
     private var lineCode: String {
         departure.name
             .replacingOccurrences(of: "Bus ", with: "")
@@ -234,7 +221,6 @@ struct GlassDepartureCard: View {
             .replacingOccurrences(of: "Tog ", with: "")
     }
 
-    /// 根据车辆类型与线路返回颜色。
     private func getLineColor(type: String, name: String) -> Color {
         if name.contains("5C") { return Color(hex: "00AEEF") }
         if type == "METRO" { return Color(hex: "00509E") }
@@ -246,14 +232,16 @@ struct GlassDepartureCard: View {
     }
 }
 
-private struct DecisionPill: View {
-    private let status: CatchStatus
+// MARK: - CatchBucketPill
+
+private struct CatchBucketPill: View {
+    private let bucket: CatchBucket
 
     var body: some View {
         HStack(spacing: 4) {
             Image(systemName: iconName)
                 .font(.caption2.weight(.semibold))
-            Text(status.message)
+            Text(bucket.label)
                 .font(.caption2.weight(.bold))
                 .lineLimit(1)
                 .minimumScaleFactor(0.85)
@@ -266,34 +254,53 @@ private struct DecisionPill: View {
         .frame(minHeight: 24)
     }
 
-    init(status: CatchStatus) {
-        self.status = status
+    init(bucket: CatchBucket) {
+        self.bucket = bucket
     }
 
     private var iconName: String {
-        switch status {
-        case .safe:
-            return "figure.walk"
-        case .risky:
-            return "figure.run"
-        case .impossible:
-            return "clock.badge.exclamationmark"
+        switch bucket {
+        case .likely:   return "figure.walk"
+        case .tight:    return "figure.run"
+        case .unlikely: return "clock.badge.exclamationmark"
         }
     }
 
     private var color: Color {
-        switch status {
-        case .safe:
-            return .green
-        case .risky:
-            return .orange
-        case .impossible:
-            return .red
+        switch bucket {
+        case .likely:   return .green
+        case .tight:    return .orange
+        case .unlikely: return .red
         }
     }
 }
 
-/// Hex 颜色扩展。
+// MARK: - DirectionChip
+
+private struct DirectionChip: View {
+    let text: String
+    let style: DepartureBoardViewModel.DirectionChipStyle
+
+    var body: some View {
+        Text(text)
+            .font(.caption2.weight(.semibold))
+            .lineLimit(1)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 3)
+            .foregroundStyle(style == .filled ? .white : .secondary)
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(style == .filled ? Color.secondary.opacity(0.6) : Color.clear)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .stroke(style == .stroked ? Color.secondary.opacity(0.5) : Color.clear, lineWidth: 1)
+            )
+    }
+}
+
+// MARK: - Color hex extension
+
 extension Color {
     init(hex: String) {
         let hex = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
@@ -342,7 +349,9 @@ extension Color {
                 finalStop: "Lufthavnen",
                 track: "A",
                 messages: nil
-            )
+            ),
+            directionText: "→ Lufthavnen",
+            directionStyle: .filled
         )
         .padding()
     }

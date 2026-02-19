@@ -1,0 +1,151 @@
+```text
+你是一个代码重构 agent。目标：把 iOS App（Nu/）的网络层与数据模型严格对齐官方 HAFAS/Rejseplanen（HAFAS.api v2.45.2）文档，并据此规范 UI 展示（Departure Board / Stations / Favorites / Map）。
+
+请按以下步骤在仓库内实施（要求：改动可编译、核心路径可跑通、关键逻辑有单元测试或最少的 smoke test）：
+
+1) 新建统一 API Client（例如 Nu/Nu/Networking/HafasClient.swift）
+   - 支持：baseurl + service path（注意 URL 结构里包含版本号）；统一 query 组装；UTF-8 URL encoding；可注入 accessId；可选 Authorization header。
+   - 默认请求 JSON（format=json），并实现“兼容 XML->JSON 自动转换导致的结构差异”的解码层：优先尝试直接解码根对象；失败则尝试在顶层 res 下解码。
+   - 为每个请求加入 requestId（用于日志追踪），并把 context 原样透传（便于把请求和响应关联）。
+
+2) 实现 Locations 能力（Stations/Favorites 入口依赖）
+   a. location.nearbystops：用用户坐标取附近 StopLocation 列表（支持 type 过滤：ST/ADR/POI/…；默认按距离排序）。
+   b. location.name：用于搜索站点；支持 input 参数；实现“若用户想要更多候选，在 query 末尾加 ?”的策略。
+   - 站点持久化策略：Favorites 里不要存 JourneyDetailRef 之类会过期的引用；只存站点稳定标识（优先存 StopLocation.id；同时备份 extId/globalId 以便重解析）。
+
+3) 实现 Station Board（Departure Board 核心）
+   - departureBoard（单站）：参数最少集 accessId + id（或 extId）+ date/time + duration/maxJourneys/products。
+   - 若要一次拉多站：实现 multiDepartureBoard（idList 用 | 分隔），并支持 operators/categories/lines/platforms/attributes/passlist/rtMode/type 等过滤能力。
+   - 分页/滚动：遵循文档的 maxJourneys 语义（不是 hard limit）；下一页以“最后一班的发车时间 + 1 分钟”作为新的 time。
+   - 解析 DepartureBoard/Departure：展示 line/name、type、direction、计划 time/date、实时字段（rtTime/rtDate/rtTrack 等）、track 变化、以及 JourneyDetailRef（用于详情页）。
+
+4) 实现 Journey Detail（卡片详情/地图线路用）
+   - journeyDetail：用 Departure/JourneyDetailRef 取详情；ref 必须 URL encode（尤其是包含 ‘|’ 时）。
+   - 注意：JourneyDetailRef 不要跨会话持久化（仅用于即时打开详情）。
+
+5) UI 展示规则（把字段“正确地”呈现）
+   - 同一条 departure：始终保留“计划时间”；如有实时字段则同时展示并计算 delay；无实时则标记为“按时刻表/无实时”。
+   - track/rtTrack：若变更要显式提示（例如“站台变更”）。
+   - 列表卡片：显示目的地方向（direction）、线路号/产品类型（name/type），以及剩余分钟（用 realtime 优先）。
+   - Stations tab：先展示 nearby stops；点击进入单站 departureBoard；或直接用 nearbyDepartureBoard/multiDepartureBoard 做聚合模式（看产品选择）。
+   - Favorites tab：用持久化站点标识重新拉取 departureBoard。
+
+6) 加入健壮性与诊断
+   - 处理 Warnings（TOO_MANY、timeout 等）并在调试面板可见。
+   - 失败降级：网络失败时保留上一次成功数据并标记“数据过期”。
+
+交付物：
+- 关键文件改动列表 + 为什么这么改
+- 1 个可运行的端到端路径：定位 -> nearby stops -> 选站 -> departureBoard 列表 -> 点一条 -> journeyDetail
+- 最少 5 个单元测试：query encoding、scroll time+1min、id 持久化策略、JSON 解码 wrapper、delay 计算
+```
+
+---
+
+## 指南：按官方文档把 Nu App 重构到“参数正确 + 展示正确”
+
+### 0) 协议与请求形态（先把“怎么请求”统一掉）
+
+* **URL 结构包含版本号**：文档的示例使用 `<baseurl>/<version>/...` 的形式（例如 `.../2.1/location.name?...`）。这意味着你们的 `baseURL` 里要么包含版本段，要么由 client 负责拼版本段。
+* **认证**：`accessId` 作为客户端标识；若系统还有额外鉴权，使用 `Authorization: Bearer ...` 或额外的 `key` 参数。建议 client 支持两者（注入式）。
+* **URL 编码**：所有参数值必须 UTF-8 URL encode（这点对 `journeyDetail?ref=...` 尤其关键）。
+* **JSON**：加 `format=json` 可让结果以 JSON 返回；并且文档明确说明 JSON 是由 **XML 自动转换**来的，所以字段/层级会带有“XML味道”（属性/元素的映射）。解码层要足够宽容。
+
+> 落地建议：实现一个 `HafasDecoder`：先尝试直接 decode；失败则尝试 unwrap 顶层 `res`（因为很多 JSON 示例里顶层是 `res` 包裹）。不要把“某个 endpoint 一定是 res 包裹”写死，做成兼容策略更稳。
+
+---
+
+### 1) 站点来源（Stations / Favorites 的“站点 ID 正确性”）
+
+你们 app 的三大入口本质都绕不开 StopLocation：
+
+#### A) 附近站点：`location.nearbystops`
+
+* 服务描述：返回一个中心坐标附近的站点/地点列表，**默认半径 1000m**，按距离排序。
+* `type` 过滤：可用 `ST`（station/stop）、`ADR`、`POI`、`CRD`、`MCP`、`HL` 等。做 Stations 页时建议默认 `type=ST`，否则 POI/地址会污染列表。
+* 示例请求长这样（至少包含经纬度与 maxNo）：
+
+#### B) 搜索站点：`location.name`
+
+* `input` 是搜索关键字；文档指出一个“容易踩坑”的点：当 **100% 匹配**时可能只返回一个结果；如果你还想给用户更多候选，可以在输入末尾加 `?` 触发更宽松匹配。
+
+#### C) Favorites 的持久化：不要存“会过期的引用”
+
+* 文档明确：部分 id（尤其是行程引用）可能在**时刻表交换后失效**，不建议跨会话保存。
+* 对策（更稳）：Favorites 存 **StopLocation 的稳定标识**（至少 `id`，并备份 `extId/globalId` 以便重解析）。文档也展示了：同一个 StopLocation 同时存在 id/extId/altId/globalIdPatterns，且这些 ID 形式都可以用于 station board 查询。
+
+---
+
+### 2) Departure Board：参数怎么用才算“对”
+
+#### A) 单站：`departureBoard`
+
+文档的 request 参数表（核心字段）：
+
+* `accessId`：Mandatory。
+* `id`（或 `extId`）：指定站点/车站；`extId` 被标注 deprecated（理由是 `id` 也支持外部 ID）。
+* `direction`：用“终点站/最后一站”的 stop id 做方向过滤。
+* `date`：YYYY-MM-DD；`time`：hh:mm（秒会被忽略）。
+* `duration`：默认 60 分钟。
+
+#### B) 多站聚合：`multiDepartureBoard`（建议用于 Stations 聚合模式）
+
+* `idList`：Mandatory，用 `|` 分隔站点 id。
+
+#### C) `maxJourneys` 与滚动分页（你们现在的列表“下拉加载更多”应该按这个做）
+
+* `maxJourneys` **不是 hard limit**：如果到达上限时，最后一分钟还有同一时刻的车次，会一并返回；目的是保证滚动可用。
+* 下一页请求：把下一次请求的 `time` 设置为“上一页最后一班发车/到达时间 + 1 分钟”。
+
+#### D) 过滤与 realtime 模式（把你们 UI 的筛选/展示做“可解释”）
+
+这些参数在站牌类服务里是通用能力（文档对 station board 过滤写得很清楚）：
+
+* `products`：位掩码；值可由 Data Information service 获取；示例说明 bus-only 需要 `16 = 2^4`。
+* `operators/categories/lines/attributes/platforms`：支持逗号分隔多值；并支持在值前加 `!` 做排除（注意：某些安装对 platform 的否定可能不支持，但你可以先做“只支持正向”UI）。
+* `passlist=1`：让返回包含经停站列表；`passlistMaxStops` 控制最大经停数。
+* `rtMode`：`OFF` 会完全忽略实时；要正确展示实时，你们默认应使用 `SERVER_DEFAULT`（或不传，让服务端默认）。
+
+#### E) board `type`（避免“一个站被拆成 mast / equivalent stop 导致漏车”）
+
+* `DEP_EQUIVS`：把 masts 与 equivalent stops 的车都算进来；对真实车站非常实用，通常比默认 DEP 更不容易“漏”。
+
+---
+
+### 3) Departure 列表“怎么展示才算对”（字段到 UI 的映射）
+
+文档对 station board response 的一句话总结非常关键：列表包含线路/交通方式/（含实时的）发车时间/实际发车站/方向文本/站台信息，并且每条都有 Journey Detail 引用。
+
+结合示例里的 `Departure` 字段（你们的卡片应至少覆盖这些）：
+
+* `name`（例如 “Bus 240”）、`type`（BUS）、`time/date`、`direction`，以及 `JourneyDetailRef`。
+* **实时展示原则**：文档强调“实时信息会附加在计划信息之上”（即：计划时间不应被实时覆盖掉，而是并列/用于计算 delay）。
+
+> 落地到你们当前 UI（截图里你们已经在做“按时刻表/保守评估/P(catch)”）：
+>
+> * 卡片上的“剩余分钟/区间”应优先基于实时发车时间（若有），否则基于计划时间；同时保留一个小字号“计划/实时”提示（否则用户会误解“系统在瞎猜”）。
+> * 如果未来要做站台变更：用 `track` vs `rtTrack`（字段名以实际 JSON 为准）做“站台变更”提示。
+> * 若无实时字段：你现在的“按时刻表”文案是合理的，但建议把它与 `rtMode`/“无实时数据”区分开：前者是数据缺失，后者是你请求时显式关了实时（rtMode=OFF）。
+
+---
+
+### 4) Journey Detail（详情页/地图线）
+
+* `journeyDetail` 通过 `ref` 参数获取；而 `ref` 需要 URL encode，尤其可能包含 `|`。
+* 不要持久化 `JourneyDetailRef`：它属于“会随时刻表交换失效”的那类引用（更适合即时打开详情）。
+
+---
+
+### 5) 健壮性：Warnings / 超量 / 超时
+
+* 文档提供了 `Warnings` 结构与典型 code（例如 TOO_MANY、Timeout exceeded）。建议你们把 warnings 至少打到 debug log / dev 面板里，方便解释“为什么列表看起来少”。
+
+---
+
+## 我对你当前这版 UI 的结论（基于文档约束）
+
+* 顶部“到站步行时间”默认折叠 + 只展示当前值/区间：这很贴合“用户并不知道走过去要多久”的现实，也不会强迫用户理解 slider。
+* 下一步加 one-tap preset（站内/路上）是对的：它把“步行时间来源”产品化成语义输入（而不是纯数字），不会与 API 文档冲突；API 层只负责给出 departure 的计划/实时，步行时间属于你们 app 的本地模型。
+
+如果你希望我把这份指南再“落成一份 agent 可执行的重构 checklist（逐文件、逐 PR 阶段）”，你只要说一声，我会按你们现有目录（Nu/Nu/Views、ViewModels、Networking）给出更细的拆分与验收点。
+

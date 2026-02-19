@@ -9,7 +9,7 @@ import Foundation
 final class RejseplanenAPIService: APIServiceProtocol {
     private let client: HafasClient
 
-    init(client: HafasClient = HafasClient()) {
+    nonisolated init(client: HafasClient = HafasClient()) {
         self.client = client
     }
 
@@ -52,8 +52,11 @@ final class RejseplanenAPIService: APIServiceProtocol {
                 distanceMeters: stop.distanceMeters,
                 type: stop.type,
                 products: stop.products,
+                productsBitmask: stop.productsBitmask,
+                productAtStop: stop.productAtStop,
                 category: stop.category,
                 zone: stop.zone,
+                zoneSource: stop.zoneSource,
                 stationGroupId: stop.stationGroupId
             )
         }
@@ -169,8 +172,11 @@ final class RejseplanenAPIService: APIServiceProtocol {
                 distanceMeters: $0.distanceMeters,
                 type: $0.type,
                 products: $0.products,
+                productsBitmask: $0.productsBitmask,
+                productAtStop: $0.productAtStop,
                 category: $0.category,
                 zone: $0.zone,
+                zoneSource: $0.zoneSource,
                 stationGroupId: $0.stationGroupId
             )
         }
@@ -476,6 +482,8 @@ private struct StopLocationWrapper: Decodable {
 /// 常见字段：
 /// - `x` / `y`：坐标，经常是放大 1_000_000 的整数。
 /// - `id` / `name` / `dist`。
+/// - `products`：bitmask 整数或字符串 token。
+/// - `productAtStop`：产品详情数组（含 cls / catOut）。
 private struct StopLocation: Decodable {
     let id: String
     let extId: String?
@@ -486,8 +494,11 @@ private struct StopLocation: Decodable {
     let distanceMeters: Double?
     let type: String?
     let products: [String]?
+    let productsBitmask: Int?
+    let productAtStop: [ProductAtStopEntry]?
     let category: String?
     let zone: String?
+    let zoneSource: String
     let stationGroupId: String?
 
     enum CodingKeys: String, CodingKey {
@@ -503,9 +514,12 @@ private struct StopLocation: Decodable {
         case type
         case product
         case products
+        case productAtStop
         case category
         case cat
         case zone
+        case tariffZone
+        case zoneNo
         case parent
         case parentId
         case groupId
@@ -535,12 +549,27 @@ private struct StopLocation: Decodable {
         longitude = rawX.map { Self.normalizeCoordinate($0, isLatitude: false) }
         latitude = rawY.map { Self.normalizeCoordinate($0, isLatitude: true) }
         distanceMeters = rawDistance
-        type = (try? container.decode(String.self, forKey: .type))
-            ?? (try? container.decode(String.self, forKey: .product))
-        products = Self.decodeProducts(container: container)
+        type = try? container.decode(String.self, forKey: .type)
+
+        // products: bitmask Int / String bitmask / String tokens / [String]
+        let (decodedProducts, decodedBitmask) = Self.decodeProductsAndBitmask(container: container)
+        products = decodedProducts
+        productsBitmask = decodedBitmask
+
+        // productAtStop: 数组或单对象
+        if let list = try? container.decode([ProductAtStopEntry].self, forKey: .productAtStop) {
+            productAtStop = list.isEmpty ? nil : list
+        } else if let single = try? container.decode(ProductAtStopEntry.self, forKey: .productAtStop) {
+            productAtStop = [single]
+        } else {
+            productAtStop = nil
+        }
+
         category = (try? container.decode(String.self, forKey: .category))
             ?? (try? container.decode(String.self, forKey: .cat))
-        zone = try? container.decode(String.self, forKey: .zone)
+        let decodedZone = Self.decodeZone(container: container)
+        zone = decodedZone.value
+        zoneSource = decodedZone.source
         stationGroupId =
             (try? container.decode(String.self, forKey: .parent))
             ?? (try? container.decode(String.self, forKey: .parentId))
@@ -578,23 +607,49 @@ private struct StopLocation: Decodable {
         return value
     }
 
-    private static func decodeProducts(
+    /// 解码 products 字段：同时提取字符串 token 和 bitmask 整数。
+    private static func decodeProductsAndBitmask(
         container: KeyedDecodingContainer<CodingKeys>
-    ) -> [String]? {
-        if let list = try? container.decode([String].self, forKey: .products) {
-            return list
+    ) -> (products: [String]?, bitmask: Int?) {
+        // 1) 尝试直接解码为 Int（纯 bitmask）
+        if let intValue = try? container.decode(Int.self, forKey: .products) {
+            return (nil, intValue)
         }
+        // 2) 尝试解码为 [String]
+        if let list = try? container.decode([String].self, forKey: .products) {
+            return (list, nil)
+        }
+        // 3) 尝试解码为 String
         if let raw = try? container.decode(String.self, forKey: .products) {
+            if let intValue = Int(raw.trimmingCharacters(in: .whitespaces)) {
+                return (nil, intValue)
+            }
             let tokens = raw
                 .split { $0 == "," || $0 == "|" || $0 == ";" }
                 .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
                 .filter { !$0.isEmpty }
-            if !tokens.isEmpty { return tokens }
+            if !tokens.isEmpty { return (tokens, nil) }
         }
+        // 4) 尝试 product（单数）字段
         if let raw = try? container.decode(String.self, forKey: .product) {
-            return [raw]
+            if let intValue = Int(raw.trimmingCharacters(in: .whitespaces)) {
+                return (nil, intValue)
+            }
+            return ([raw], nil)
         }
-        return nil
+        return (nil, nil)
+    }
+
+    private static func decodeZone(
+        container: KeyedDecodingContainer<CodingKeys>
+    ) -> (value: String?, source: String) {
+        if let text = try? container.decode(String.self, forKey: .zone) { return (text, "zone") }
+        if let value = try? container.decode(Int.self, forKey: .zone) { return (String(value), "zoneInt") }
+        if let text = try? container.decode(String.self, forKey: .tariffZone) { return (text, "tariffZone") }
+        if let value = try? container.decode(Int.self, forKey: .tariffZone) { return (String(value), "tariffZoneInt") }
+        if let text = try? container.decode(String.self, forKey: .zoneNo) { return (text, "zoneNo") }
+        if let value = try? container.decode(Int.self, forKey: .zoneNo) { return (String(value), "zoneNoInt") }
+        return (nil, "missing")
     }
 }
 

@@ -73,21 +73,21 @@ enum TransportModeResolver {
     /// - 256: Ferry → (skip)
     /// - 512: Walking → (skip)
     /// - 1024: Taxi → (skip)
-    private(set) static var productClassMap: [Int: SingleMode] = defaultProductClassMap
+    nonisolated(unsafe) private(set) static var productClassMap: [Int: SingleMode] = defaultProductClassMap
 
-    static let defaultProductClassMap: [Int: SingleMode] = [
+    nonisolated static let defaultProductClassMap: [Int: SingleMode] = [
         1: .tog, 2: .tog, 4: .tog, 8: .tog,
         16: .bus, 32: .bus,
         64: .metro, 128: .metro
     ]
 
     /// 用 `/datainfo` 返回的数据更新映射表。
-    static func updateClassMap(_ newMap: [Int: SingleMode]) {
+    nonisolated static func updateClassMap(_ newMap: [Int: SingleMode]) {
         productClassMap = newMap
     }
 
     /// 重置为默认映射（测试用）。
-    static func resetToDefaults() {
+    nonisolated static func resetToDefaults() {
         productClassMap = defaultProductClassMap
     }
 
@@ -103,7 +103,7 @@ enum TransportModeResolver {
     ///   - stopId: 用于 debug 日志
     ///   - stopType: 原始 type 字段（仅用于 debug 日志，不参与推断）
     /// - Returns: 解析出的模式集合和来源标识
-    static func resolve(
+    nonisolated static func resolve(
         productAtStop: [ProductAtStopEntry]?,
         productsBitmask: Int?,
         productTokens: [String]?,
@@ -161,7 +161,7 @@ enum TransportModeResolver {
     // MARK: - Bitmask decoding
 
     /// 从 products bitmask 解码交通模式。
-    static func modesFromBitmask(_ bitmask: Int) -> Set<SingleMode> {
+    nonisolated static func modesFromBitmask(_ bitmask: Int) -> Set<SingleMode> {
         var modes = Set<SingleMode>()
         for (cls, mode) in productClassMap {
             if bitmask & cls != 0 {
@@ -174,7 +174,7 @@ enum TransportModeResolver {
     // MARK: - productAtStop decoding
 
     /// 从 productAtStop 条目解码交通模式。
-    static func modesFromProductAtStop(_ entries: [ProductAtStopEntry]) -> Set<SingleMode> {
+    nonisolated static func modesFromProductAtStop(_ entries: [ProductAtStopEntry]) -> Set<SingleMode> {
         var modes = Set<SingleMode>()
         for entry in entries {
             // 优先用 cls
@@ -195,7 +195,7 @@ enum TransportModeResolver {
     // MARK: - String token matching
 
     /// 从字符串 token 匹配交通模式（兼容旧格式 products 和 category）。
-    static func modesFromStringTokens(_ tokens: [String]) -> Set<SingleMode> {
+    nonisolated static func modesFromStringTokens(_ tokens: [String]) -> Set<SingleMode> {
         var modes = Set<SingleMode>()
         for token in tokens.map({ $0.uppercased() }) {
             // 先尝试解析为 bitmask 整数
@@ -219,14 +219,14 @@ enum TransportModeResolver {
 
     /// 站名兜底：仅允许极少数明确标识。
     /// 绝对禁止用 "St." 推断 TOG。
-    static func modesFromNameFallback(_ name: String) -> Set<SingleMode> {
+    nonisolated static func modesFromNameFallback(_ name: String) -> Set<SingleMode> {
         let lower = name.lowercased()
         if lower.contains("(metro)") { return [.metro] }
         if lower.contains("(s-tog)") || lower.contains("(s\u{2011}tog)") { return [.tog] }
         return []
     }
 
-    static func modesFromExplicitType(_ type: String?) -> Set<SingleMode> {
+    nonisolated static func modesFromExplicitType(_ type: String?) -> Set<SingleMode> {
         guard let raw = type?.trimmingCharacters(in: .whitespacesAndNewlines).uppercased() else {
             return []
         }
@@ -244,7 +244,7 @@ enum TransportModeResolver {
 
     // MARK: - Debug logging
 
-    private static func debugLog(
+    private nonisolated static func debugLog(
         id: String, name: String, type: String?,
         bitmask: Int?, tokens: [String]?,
         entries: [ProductAtStopEntry]?, modes: Set<SingleMode>, source: String

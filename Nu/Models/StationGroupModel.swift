@@ -90,7 +90,8 @@ struct StationGroupModel: Identifiable, Hashable {
             ].joined(separator: " ")
             let coord = String(format: "(%.6f,%.6f)", station.latitude, station.longitude)
             let memberMode = resolution.modes.isEmpty ? "unknown" : modeSetString(resolution.modes)
-            emit("  - stop id=\(station.id) name=\"\(station.name)\" type=\(station.type ?? "nil") products=\(productsToken) rawProducts={\(rawProductsParts)} coord=\(coord) mode=\(memberMode) reason=\(resolution.reason)")
+            let zoneText = station.zone?.trimmingCharacters(in: .whitespacesAndNewlines)
+            emit("  - stop id=\(station.id) name=\"\(station.name)\" type=\(station.type ?? "nil") products=\(productsToken) rawProducts={\(rawProductsParts)} zone=\(zoneText?.isEmpty == false ? zoneText! : "nil") zoneSource=\(station.zoneSource) coord=\(coord) mode=\(memberMode) reason=\(resolution.reason)")
         }
 
         let aggregatedText = aggregated.isEmpty ? "unknown" : modeSetString(aggregated)

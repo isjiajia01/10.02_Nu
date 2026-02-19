@@ -60,7 +60,7 @@ extension APIServiceProtocol {
     }
 }
 
-struct MultiDepartureFilters {
+struct MultiDepartureFilters: Sendable {
     var operators: [String] = []
     var categories: [String] = []
     var lines: [String] = []
@@ -69,6 +69,26 @@ struct MultiDepartureFilters {
     var passlist: Bool = false
     var rtMode: String = "SERVER_DEFAULT"
     var type: String = "DEP_EQUIVS"
+
+    nonisolated init(
+        operators: [String] = [],
+        categories: [String] = [],
+        lines: [String] = [],
+        platforms: [String] = [],
+        attributes: [String] = [],
+        passlist: Bool = false,
+        rtMode: String = "SERVER_DEFAULT",
+        type: String = "DEP_EQUIVS"
+    ) {
+        self.operators = operators
+        self.categories = categories
+        self.lines = lines
+        self.platforms = platforms
+        self.attributes = attributes
+        self.passlist = passlist
+        self.rtMode = rtMode
+        self.type = type
+    }
 }
 
 /// 网络端点定义。

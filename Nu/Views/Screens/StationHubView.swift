@@ -28,18 +28,32 @@ struct StationHubView: View {
                         stationExtId: bestEntrance.extId,
                         stationGlobalId: bestEntrance.globalId,
                         stationName: bestEntrance.name,
-                        stationType: bestEntrance.type
+                        stationType: bestEntrance.stationType,
+                        walkingDestinations: group.stations.map { station in
+                            WalkingETADestination(
+                                stopId: station.id,
+                                name: station.name,
+                                groupId: group.id,
+                                latitude: station.latitude,
+                                longitude: station.longitude,
+                                mode: modeFor(station),
+                                isRecommended: station.id == bestEntrance.id
+                            )
+                        }
                     )
                 ) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(L10n.tr("stations.hub.bestEntrance"))
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.secondary)
-                        Text(bestEntrance.name)
-                            .font(.headline)
-                        Text(bestEntrance.stationModeSubtitle)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                    HStack(spacing: 10) {
+                        entranceModeBadge(bestEntrance)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(L10n.tr("stations.hub.bestEntrance"))
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                            Text(bestEntrance.name)
+                                .font(.headline)
+                            Text(bestEntrance.stationModeSubtitle)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
                     }
                 }
             }
@@ -52,10 +66,22 @@ struct StationHubView: View {
                             stationExtId: station.extId,
                             stationGlobalId: station.globalId,
                             stationName: station.name,
-                            stationType: station.type
+                            stationType: station.stationType,
+                            walkingDestinations: group.stations.map { member in
+                                WalkingETADestination(
+                                    stopId: member.id,
+                                    name: member.name,
+                                    groupId: group.id,
+                                    latitude: member.latitude,
+                                    longitude: member.longitude,
+                                    mode: modeFor(member),
+                                    isRecommended: member.id == bestEntrance.id
+                                )
+                            }
                         )
                     ) {
                         HStack(spacing: 8) {
+                            entranceModeBadge(station)
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(station.entranceLabel)
                                     .font(.subheadline.weight(.semibold))
@@ -134,6 +160,37 @@ struct StationHubView: View {
             result.append(.mixed)
         }
         return result
+    }
+
+    /// 每个入口行的彩色 mode 小图标，基于 entry 自身的 stationMode（不继承 group）。
+    private func entranceModeBadge(_ station: StationModel) -> some View {
+        let style = StationModeVisualStyle(mode: station.stationMode)
+        return RoundedRectangle(cornerRadius: 8, style: .continuous)
+            .fill(style.badgeBackground)
+            .frame(width: 32, height: 32)
+            .overlay {
+                Image(systemName: style.symbolName)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(style.iconColor)
+            }
+    }
+}
+
+private func modeFor(_ station: StationModel) -> WalkingETADestination.Mode {
+    switch station.stationMode {
+    case .bus:
+        return .bus
+    case .metro:
+        return .metro
+    case .tog:
+        return .tog
+    case .mixed(let set):
+        if set.contains(.metro) { return .metro }
+        if set.contains(.tog) { return .tog }
+        if set.contains(.bus) { return .bus }
+        return .unknown
+    case .unknown:
+        return .unknown
     }
 }
 
