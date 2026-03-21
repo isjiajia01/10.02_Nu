@@ -22,6 +22,15 @@ enum AppErrorPresenter {
             switch apiError {
             case .network:
                 return L10n.tr("error.offline")
+            case .rateLimited(let retryAfter):
+                if let retryAfter, retryAfter > 0 {
+                    return L10n.tr("error.rateLimitedWithRetry", Int(retryAfter.rounded(.up)))
+                }
+                return L10n.tr("error.rateLimited")
+            case .unauthorized:
+                return L10n.tr("error.unauthorized")
+            case .forbidden:
+                return L10n.tr("error.forbidden")
             case .httpStatus(let code) where code >= 500:
                 return L10n.tr("error.apiUnavailable")
             case .httpStatus:

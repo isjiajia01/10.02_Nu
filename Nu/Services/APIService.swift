@@ -1,4 +1,5 @@
 import Foundation
+import CoreLocation
 
 /// API 服务协议（用于依赖注入）。
 ///
@@ -33,6 +34,19 @@ protocol APIServiceProtocol {
     ///   - id: JourneyDetailRef 的 `ref` 值（按接口要求作为 `id` 传递）
     ///   - date: 可选运营日（yyyy-MM-dd）
     func fetchJourneyDetail(id: String, date: String?) async throws -> JourneyDetail
+
+    /// 行程位置（`journeypos`）。
+    func fetchJourneyPositions(
+        bbox: JourneyPosBBox,
+        filters: JourneyPosFilters,
+        positionMode: JourneyPosMode
+    ) async throws -> [JourneyVehicle]
+
+    /// 解析追踪身份：优先 jid，失败则回退到 heuristic 键。
+    func resolveTrackingIdentity(
+        from departure: Departure,
+        operationDate: String?
+    ) async throws -> TrackingIdentity
 }
 
 /// 向后兼容：保留旧命名，避免其他文件立即大规模改动。
@@ -57,6 +71,28 @@ extension APIServiceProtocol {
 
     func fetchJourneyDetail(id: String, date: String? = nil) async throws -> JourneyDetail {
         throw APIError.unknown
+    }
+
+    func fetchJourneyPositions(
+        bbox: JourneyPosBBox,
+        filters: JourneyPosFilters,
+        positionMode: JourneyPosMode = .calcReport
+    ) async throws -> [JourneyVehicle] {
+        throw APIError.unknown
+    }
+
+    func resolveTrackingIdentity(
+        from departure: Departure,
+        operationDate: String? = nil
+    ) async throws -> TrackingIdentity {
+        let effective = departure.effectiveDepartureDate
+        return TrackingIdentity(
+            journeyRef: departure.journeyRef,
+            jid: nil,
+            line: departure.name,
+            direction: departure.direction,
+            plannedOrRealtimeDeparture: effective?.date
+        )
     }
 }
 
@@ -88,6 +124,121 @@ struct MultiDepartureFilters: Sendable {
         self.passlist = passlist
         self.rtMode = rtMode
         self.type = type
+    }
+}
+
+struct JourneyPosBBox: Sendable, Equatable {
+    let llLat: Double
+    let llLon: Double
+    let urLat: Double
+    let urLon: Double
+
+    static func from(center: CLLocationCoordinate2D, spanLatitude: Double, spanLongitude: Double) -> [JourneyPosBBox] {
+        let halfLat = max(0.0001, spanLatitude / 2.0)
+        let halfLon = max(0.0001, spanLongitude / 2.0)
+
+        let llLat = clampLatitude(center.latitude - halfLat)
+        let urLat = clampLatitude(center.latitude + halfLat)
+        var llLon = normalizeLongitude(center.longitude - halfLon)
+        var urLon = normalizeLongitude(center.longitude + halfLon)
+
+        if urLon < llLon {
+            // Anti-meridian crossing: split into two boxes.
+            return [
+                JourneyPosBBox(llLat: llLat, llLon: llLon, urLat: urLat, urLon: 180),
+                JourneyPosBBox(llLat: llLat, llLon: -180, urLat: urLat, urLon: urLon)
+            ]
+        }
+
+        llLon = clampLongitude(llLon)
+        urLon = clampLongitude(urLon)
+        return [JourneyPosBBox(llLat: llLat, llLon: llLon, urLat: urLat, urLon: urLon)]
+    }
+
+    private static func clampLatitude(_ value: Double) -> Double {
+        min(90, max(-90, value))
+    }
+
+    private static func clampLongitude(_ value: Double) -> Double {
+        min(180, max(-180, value))
+    }
+
+    private static func normalizeLongitude(_ value: Double) -> Double {
+        var v = value
+        while v > 180 { v -= 360 }
+        while v < -180 { v += 360 }
+        return v
+    }
+}
+
+struct JourneyPosFilters: Sendable, Equatable {
+    var jid: String?
+    var lines: [String] = []
+    var operators: [String] = []
+    var products: [String] = []
+
+    nonisolated init(jid: String? = nil, lines: [String] = [], operators: [String] = [], products: [String] = []) {
+        self.jid = jid
+        self.lines = lines
+        self.operators = operators
+        self.products = products
+    }
+}
+
+enum JourneyPosMode: String, Sendable {
+    case reportOnly = "REPORT_ONLY"
+    case calcReport = "CALC_REPORT"
+    case calc = "CALC"
+}
+
+enum MatchConfidence: String, Sendable, Equatable {
+    case exact
+    case heuristic
+}
+
+struct TrackingIdentity: Sendable, Equatable {
+    var journeyRef: String?
+    var jid: String?
+    var line: String?
+    var direction: String?
+    var plannedOrRealtimeDeparture: Date?
+    var lastKnownCoordinate: CLLocationCoordinate2D?
+    var lastMatchedVehicleId: String?
+    var lastMatchAt: Date?
+    var matchConfidence: MatchConfidence = .heuristic
+
+    static func == (lhs: TrackingIdentity, rhs: TrackingIdentity) -> Bool {
+        lhs.journeyRef == rhs.journeyRef
+            && lhs.jid == rhs.jid
+            && lhs.line == rhs.line
+            && lhs.direction == rhs.direction
+            && lhs.plannedOrRealtimeDeparture == rhs.plannedOrRealtimeDeparture
+            && lhs.lastKnownCoordinate?.latitude == rhs.lastKnownCoordinate?.latitude
+            && lhs.lastKnownCoordinate?.longitude == rhs.lastKnownCoordinate?.longitude
+            && lhs.lastMatchedVehicleId == rhs.lastMatchedVehicleId
+            && lhs.lastMatchAt == rhs.lastMatchAt
+            && lhs.matchConfidence == rhs.matchConfidence
+    }
+}
+
+struct JourneyVehicle: Sendable, Equatable, Identifiable {
+    let id: String
+    let jid: String?
+    let line: String?
+    let direction: String?
+    let coordinate: CLLocationCoordinate2D
+    let lastUpdated: Date?
+    let isReportedPosition: Bool?
+
+    static func == (lhs: JourneyVehicle, rhs: JourneyVehicle) -> Bool {
+        lhs.id == rhs.id
+            && lhs.jid == rhs.jid
+            && lhs.line == rhs.line
+            && lhs.direction == rhs.direction
+            && lhs.coordinate.latitude == rhs.coordinate.latitude
+            && lhs.coordinate.longitude == rhs.coordinate.longitude
+            && lhs.lastUpdated == rhs.lastUpdated
+            && lhs.isReportedPosition == rhs.isReportedPosition
     }
 }
 

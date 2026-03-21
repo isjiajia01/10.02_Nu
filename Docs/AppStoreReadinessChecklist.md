@@ -10,7 +10,7 @@
 | ID | Area | Current Issue | Plan | Status | Evidence |
 |---|---|---|---|---|---|
 | P0-1 | Privacy copy | `NSLocationWhenInUseUsageDescription` is Danish, not English-only UI policy | Replace with clear English purpose text in Debug/Release build settings | Completed | `Nu.xcodeproj/project.pbxproj` now uses English location purpose text |
-| P0-2 | Secrets | Rejseplanen `accessId` hardcoded in source (`AppConfig.defaultAccessID`) | Move key to build setting / env (`REJSEPLANEN_ACCESS_ID`), fail fast if missing in Release | Completed | `Nu/Core/AppConfig.swift` no longer contains committed key; `Info.plist` reads `REJSEPLANEN_ACCESS_ID` |
+| P0-2 | Secrets | Rejseplanen `accessId` must be provided explicitly; no source-level default may remain | Require `REJSEPLANEN_ACCESS_ID` via env / build setting / Info.plist-backed configuration; fail fast when missing | Completed | `Nu/Core/AppConfig.swift` no longer embeds a default key and returns missing-access-id state when no explicit value is configured |
 | P0-3 | Testing gate | `xcodebuild test` fails: scheme has no configured test targets | Add `NuTests` target and wire scheme TestAction | Completed | `xcodebuild ... test` now succeeds on `iPhone 17` simulator with passing tests |
 | P0-4 | User-facing debug leakage | Request URLs / raw payload logs can leak identifiers in Debug workflows | Centralize debug logging and ensure fully excluded in Release | Completed | `Nu/Core/AppLogger.swift` + call-sites updated to `AppLogger.debug` |
 
@@ -50,7 +50,7 @@ rg -n "Vi bruger din lokation|defaultAccessID|print\(" Nu
 ## Validation Results (2026-02-13)
 - `build`: PASS (`** BUILD SUCCEEDED **`)
 - `test`: PASS (`** TEST SUCCEEDED **` on `platform=iOS Simulator,name=iPhone 17`)
-- `privacy key check`: PASS (`NSLocationWhenInUseUsageDescription` is English; hardcoded default accessId removed)
+- `privacy key check`: PASS (`NSLocationWhenInUseUsageDescription` is English; no hardcoded default accessId remains and runtime now requires an explicit configured key`)
 - unit tests added:
   - `NuCoreTests.testJourneyDetailURLEncodingEncodesPipe`
   - `NuCoreTests.testStationGroupingMergesSameBaseNameWithinThreshold`

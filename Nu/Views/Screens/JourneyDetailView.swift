@@ -15,6 +15,7 @@ struct JourneyDetailView: View {
     @StateObject private var vm = JourneyDetailViewModel()
     @State private var showPassedStops = false
     @State private var showFullRoute = false
+    @State private var showTrackingMap = false
 
     init(
         journeyID: String,
@@ -85,6 +86,23 @@ struct JourneyDetailView: View {
         }
         .navigationTitle(L10n.tr("journeyDetail.title"))
         .navigationBarTitleDisplayMode(.inline)
+        .navigationDestination(isPresented: $showTrackingMap) {
+            VehicleTrackingMapView(
+                departure: trackingDeparture,
+                operationDate: operationDate,
+                apiService: apiService
+            )
+        }
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    showTrackingMap = true
+                } label: {
+                    Label("Track", systemImage: "location.viewfinder")
+                }
+                .accessibilityLabel("Track vehicle")
+            }
+        }
         .task {
             await load()
         }
@@ -324,6 +342,23 @@ struct JourneyDetailView: View {
         }
         let hue = Double(hash % 360) / 360.0
         return Color(hue: hue, saturation: 0.55, brightness: 0.78)
+    }
+
+    private var trackingDeparture: Departure {
+        Departure(
+            journeyRef: journeyID,
+            name: lineName,
+            type: transportType,
+            stop: currentStopName,
+            time: plannedTime,
+            date: operationDate ?? "",
+            rtTime: realtimeTime,
+            rtDate: operationDate,
+            direction: directionText,
+            finalStop: directionText,
+            track: nil,
+            messages: nil
+        )
     }
 }
 

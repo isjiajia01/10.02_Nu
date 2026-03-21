@@ -1,4 +1,5 @@
 import Foundation
+import CoreLocation
 
 /// Mock 服务：用于在未接入真实 API 时演示完整界面与交互。
 ///
@@ -115,5 +116,38 @@ final class MockAPIService: APIServiceProtocol {
             JourneyStop(id: "001", name: "København H", arrTime: "12:00", depTime: "12:02", track: "5"),
             JourneyStop(id: "002", name: "Nørreport", arrTime: "12:08", depTime: "12:09", track: "2")
         ])
+    }
+
+    func fetchJourneyPositions(
+        bbox: JourneyPosBBox,
+        filters: JourneyPosFilters,
+        positionMode: JourneyPosMode
+    ) async throws -> [JourneyVehicle] {
+        let coordinate = CLLocationCoordinate2D(
+            latitude: (bbox.llLat + bbox.urLat) / 2,
+            longitude: (bbox.llLon + bbox.urLon) / 2
+        )
+        return [
+            JourneyVehicle(
+                id: filters.jid ?? "mock-vehicle-1",
+                jid: filters.jid ?? "mock-vehicle-1",
+                line: filters.lines.first ?? "5C",
+                direction: "Lufthavnen",
+                coordinate: coordinate,
+                lastUpdated: Date(),
+                isReportedPosition: true
+            )
+        ]
+    }
+
+    func resolveTrackingIdentity(from departure: Departure, operationDate: String?) async throws -> TrackingIdentity {
+        TrackingIdentity(
+            journeyRef: departure.journeyRef,
+            jid: departure.journeyRef,
+            line: departure.name,
+            direction: departure.direction,
+            plannedOrRealtimeDeparture: departure.effectiveDepartureDate?.date,
+            matchConfidence: departure.journeyRef == nil ? .heuristic : .exact
+        )
     }
 }

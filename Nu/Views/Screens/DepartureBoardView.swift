@@ -4,6 +4,7 @@ import SwiftUI
 ///
 /// Uses `DepartureBoardViewModel` to fetch departures for a station.
 /// Each item is rendered via `GlassDepartureCard`.
+@MainActor
 struct DepartureBoardView: View {
     private let stationId: String
     private let stationExtId: String?
@@ -13,7 +14,7 @@ struct DepartureBoardView: View {
     private let walkingDestinations: [WalkingETADestination]
     private let apiServiceForDetail: APIServiceProtocol
     @StateObject private var viewModel: DepartureBoardViewModel
-    @StateObject private var favoritesManager = FavoritesManager.shared
+    @StateObject private var favoritesManager: FavoritesManager
     @State private var isWalkingPanelExpanded = false
 
     init(
@@ -23,20 +24,27 @@ struct DepartureBoardView: View {
         stationName: String? = nil,
         stationType: String? = nil,
         walkingDestinations: [WalkingETADestination] = [],
-        apiService: APIServiceProtocol = RejseplanenAPIService()
+        apiService: APIServiceProtocol? = nil,
+        dependencies: AppDependencies? = nil
     ) {
+        let resolvedDependencies = dependencies ?? AppDependencies.live
+        let resolvedAPIService = apiService ?? resolvedDependencies.apiService
+
         self.stationId = stationId
         self.stationExtId = stationExtId
         self.stationGlobalId = stationGlobalId
         self.stationName = stationName
         self.stationType = stationType
         self.walkingDestinations = walkingDestinations
-        self.apiServiceForDetail = apiService
+        self.apiServiceForDetail = resolvedAPIService
         _viewModel = StateObject(wrappedValue: DepartureBoardViewModel(
             stationId: stationId,
             walkingDestinations: walkingDestinations,
-            apiService: apiService
+            apiService: resolvedAPIService,
+            locationManager: resolvedDependencies.locationManager,
+            walkingETAService: resolvedDependencies.makeWalkingETAService()
         ))
+        _favoritesManager = StateObject(wrappedValue: resolvedDependencies.favoritesManager)
     }
 
     var body: some View {

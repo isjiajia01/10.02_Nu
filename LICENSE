@@ -1,0 +1,105 @@
+MIT License
+
+Copyright (c) 2026 Jiajia Zhang
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+*** Add File: /Users/zhangjiajia/Life_OS/10-19 Personal/10_app/10.02_Nu/Nu/Docs/HIRING_MANAGER_GUIDE.md
+# Hiring Manager Guide
+
+This document is written for recruiters, hiring managers, and interviewers who want a quick but concrete understanding of what `Nu` demonstrates.
+
+## One-paragraph summary
+
+`Nu` is a native iOS public-transport app prototype focused on nearby stations, departure boards, journey detail, map-based exploration, favorites, walking ETA support, and live vehicle-tracking-oriented flows. It is valuable as a portfolio project because it combines user-facing product thinking with real API integration, location-aware UX, privacy-aware configuration, caching, error handling, and testable architecture work.
+
+## What the candidate owned
+
+- Product direction and feature scope for a commuter-focused transit app.
+- Native iOS implementation in SwiftUI.
+- API integration with Rejseplanen/HAFAS-style transport endpoints.
+- UI state management with MVVM and dependency injection.
+- Privacy and release-hardening work such as secret removal, configuration isolation, and audit docs.
+- Automated tests for core parsing, mapping, and view-model flows.
+
+## What to evaluate
+
+### 1. Product judgment
+- The app is not a generic demo list. It focuses on concrete commuter workflows:
+  - finding nearby stations
+  - checking departures quickly
+  - drilling into journey detail
+  - browsing transit context on a map
+  - saving favorites for repeat use
+
+### 2. System design
+- The codebase uses a pragmatic SwiftUI + MVVM structure.
+- `Core`, `Networking`, `Services`, `Domain`, `ViewModels`, and `Views` are separated with clear intent.
+- Dependencies are injected through `AppDependencies`, which keeps long-lived services out of view code.
+
+### 3. API and data handling
+- The app integrates with a real transport data source rather than mocked-only data.
+- It handles location, station IDs, journey IDs, and transport-specific response mapping.
+- Runtime credentials are injected externally instead of committed to source.
+
+### 4. Quality and risk management
+- There are explicit docs for architecture, privacy, release engineering, and security posture.
+- The repository includes tests and a documented local build/test workflow.
+- The project acknowledges current gaps instead of pretending to be production-complete.
+
+### 5. UX tradeoffs
+- The UI emphasizes fast scanning and transport relevance over generic CRUD patterns.
+- The app includes stale-data messaging, error-state handling, and fallback paths when location or API config is unavailable.
+
+## Suggested review path
+
+If you only have 5 to 10 minutes:
+
+1. Read `/README.md`.
+2. Scan `/Docs/Architecture.md`.
+3. Open `/Nu/Views/MainTabView.swift`.
+4. Open `/Nu/ViewModels/DepartureBoardViewModel.swift`.
+5. Open `/Nu/Networking/HafasClient.swift`.
+
+If you have 20 to 30 minutes:
+
+1. Review `/Docs/Privacy.md` and `/Docs/SecurityAudit.md`.
+2. Review `/Nu/Core/AppConfig.swift` for config isolation.
+3. Review `/NuTests/NuCoreTests.swift` for evidence of test coverage on core flows.
+
+## What this project is not
+
+- It is not presented as a shipped App Store business.
+- It is not presented as a fully productionized team product.
+- It should be read as a strong engineering portfolio artifact: a realistic app surface with non-trivial data, architecture, and release-readiness concerns.
+
+## Interview prompts this repo can support
+
+- How would you evolve the current MVVM boundaries into feature modules?
+- What would you change before a real App Store launch?
+- How should API-key handling differ between local development, CI, and production release pipelines?
+- Which parts of the project are pure business logic versus UI orchestration?
+- How would you measure performance and accessibility readiness for this app?
+
+## Honest limitations
+
+- The app depends on an external transport API key for live data.
+- Build and test instructions assume a local Xcode/iOS simulator environment.
+- Some architecture cleanup is still documented as ongoing work rather than finished work.
+

@@ -6,6 +6,7 @@ enum HafasServicePath: String {
     case departureBoard = "departureBoard"
     case multiDepartureBoard = "multiDepartureBoard"
     case journeyDetail = "journeyDetail"
+    case journeyPos = "journeypos"
     case trip = "trip"
     case dataInfo = "datainfo"
 }
@@ -70,20 +71,59 @@ struct HafasResponse<T: Decodable> {
     nonisolated let context: [String: String]
 }
 
+enum HafasRequestBucket {
+    case general
+    case polling
+}
+
+struct HafasRetryPolicy {
+    let maxRetries: Int
+    let initialDelaySeconds: TimeInterval
+    let maxDelaySeconds: TimeInterval
+
+    static let standard = HafasRetryPolicy(maxRetries: 2, initialDelaySeconds: 0.5, maxDelaySeconds: 3)
+    static let polling = HafasRetryPolicy(maxRetries: 3, initialDelaySeconds: 0.5, maxDelaySeconds: 5)
+    static let disabled = HafasRetryPolicy(maxRetries: 0, initialDelaySeconds: 0, maxDelaySeconds: 0)
+}
+
+actor RequestRateLimiter {
+    private let minInterval: TimeInterval
+    private var lastRequestTime: Date = .distantPast
+
+    init(minInterval: TimeInterval) {
+        self.minInterval = max(0, minInterval)
+    }
+
+    func waitTurn() async {
+        let elapsed = Date().timeIntervalSince(lastRequestTime)
+        if elapsed < minInterval {
+            let wait = minInterval - elapsed
+            try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000))
+        }
+        lastRequestTime = Date()
+    }
+}
+
 final class HafasClient {
     private let session: URLSession
     private let decoder: JSONDecoder
+    private let generalLimiter: RequestRateLimiter
+    private let pollingLimiter: RequestRateLimiter
 
     nonisolated init(session: URLSession = .shared, decoder: JSONDecoder = JSONDecoder()) {
         self.session = session
         self.decoder = decoder
+        self.generalLimiter = RequestRateLimiter(minInterval: AppConfig.generalMinRequestInterval)
+        self.pollingLimiter = RequestRateLimiter(minInterval: AppConfig.pollingMinRequestInterval)
     }
 
     nonisolated func request<T: Decodable>(
         service: HafasServicePath,
         queryItems: [URLQueryItem],
         method: String = "GET",
-        context: HafasRequestContext = HafasRequestContext()
+        context: HafasRequestContext = HafasRequestContext(),
+        bucket: HafasRequestBucket = .general,
+        retryPolicy: HafasRetryPolicy = .standard
     ) async throws -> HafasResponse<T> {
         let requests = try makeRequests(
             service: service,
@@ -95,13 +135,19 @@ final class HafasClient {
         var lastError: Error = APIError.unknown
         for request in requests {
             do {
-                let (value, warnings) = try await execute(request: request, as: T.self, context: context)
+                let (value, warnings) = try await executeWithRetry(
+                    request: request,
+                    as: T.self,
+                    context: context,
+                    bucket: bucket,
+                    retryPolicy: retryPolicy
+                )
                 #if DEBUG
                 if !warnings.isEmpty {
                     AppLogger.debug("[HAFAS] requestId=\(context.requestId) warnings=\(warnings.map { $0.code ?? "-" }.joined(separator: ",")) context=\(context.context)")
                     let text = warnings.compactMap { $0.code ?? $0.text }.joined(separator: ", ")
                     Task { @MainActor in
-                        DiagnosticsStore.shared.pushWarning("HAFAS Warnings: \(text)")
+                        AppDependencies.currentDiagnosticsStore.pushWarning("HAFAS Warnings: \(text)")
                     }
                 }
                 #endif
@@ -118,6 +164,84 @@ final class HafasClient {
         }
 
         throw lastError
+    }
+
+    private nonisolated func executeWithRetry<T: Decodable>(
+        request: URLRequest,
+        as type: T.Type,
+        context: HafasRequestContext,
+        bucket: HafasRequestBucket,
+        retryPolicy: HafasRetryPolicy
+    ) async throws -> (T, [HafasWarningsContainer.Warning]) {
+        var attempt = 0
+        var lastError: Error = APIError.unknown
+
+        while attempt <= retryPolicy.maxRetries {
+            await limiter(for: bucket).waitTurn()
+            do {
+                return try await execute(request: request, as: type, context: context)
+            } catch {
+                lastError = error
+                guard shouldRetry(error: error, attempt: attempt, maxRetries: retryPolicy.maxRetries) else {
+                    throw error
+                }
+
+                let delay = delayForRetry(
+                    error: error,
+                    attempt: attempt,
+                    initialDelaySeconds: retryPolicy.initialDelaySeconds,
+                    maxDelaySeconds: retryPolicy.maxDelaySeconds
+                )
+                if delay > 0 {
+                    try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                }
+                attempt += 1
+            }
+        }
+
+        throw lastError
+    }
+
+    private nonisolated func limiter(for bucket: HafasRequestBucket) -> RequestRateLimiter {
+        switch bucket {
+        case .general:
+            return generalLimiter
+        case .polling:
+            return pollingLimiter
+        }
+    }
+
+    private nonisolated func shouldRetry(error: Error, attempt: Int, maxRetries: Int) -> Bool {
+        guard attempt < maxRetries else { return false }
+        guard let apiError = error as? APIError else { return false }
+        switch apiError {
+        case .rateLimited:
+            return true
+        case .network:
+            return true
+        case .httpStatus(let code):
+            return code >= 500
+        case .unauthorized, .forbidden:
+            return false
+        default:
+            return false
+        }
+    }
+
+    private nonisolated func delayForRetry(
+        error: Error,
+        attempt: Int,
+        initialDelaySeconds: TimeInterval,
+        maxDelaySeconds: TimeInterval
+    ) -> TimeInterval {
+        if case APIError.rateLimited(let retryAfter) = error,
+           let retryAfter,
+           retryAfter > 0 {
+            return min(retryAfter, maxDelaySeconds)
+        }
+
+        let factor = pow(2.0, Double(attempt))
+        return min(initialDelaySeconds * factor, maxDelaySeconds)
     }
 
     nonisolated func makeURL(service: HafasServicePath, queryItems: [URLQueryItem]) throws -> URL {
@@ -137,6 +261,16 @@ final class HafasClient {
             throw APIError.invalidResponse
         }
         guard (200...299).contains(httpResponse.statusCode) else {
+            if httpResponse.statusCode == 429 {
+                let retryAfter = Self.parseRetryAfter(httpResponse.value(forHTTPHeaderField: "Retry-After"))
+                throw APIError.rateLimited(retryAfter: retryAfter)
+            }
+            if httpResponse.statusCode == 401 {
+                throw APIError.unauthorized
+            }
+            if httpResponse.statusCode == 403 {
+                throw APIError.forbidden
+            }
             if let text = extractServerText(from: data) {
                 throw APIError.serverMessage("HTTP \(httpResponse.statusCode): \(text)")
             }
@@ -182,6 +316,23 @@ final class HafasClient {
             return String(text.prefix(220))
         }
 
+        return nil
+    }
+
+    nonisolated private static func parseRetryAfter(_ value: String?) -> TimeInterval? {
+        guard let value else { return nil }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let seconds = TimeInterval(trimmed), seconds >= 0 {
+            return seconds
+        }
+
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = "EEE',' dd MMM yyyy HH':'mm':'ss z"
+        if let date = formatter.date(from: trimmed) {
+            return max(0, date.timeIntervalSinceNow)
+        }
         return nil
     }
 

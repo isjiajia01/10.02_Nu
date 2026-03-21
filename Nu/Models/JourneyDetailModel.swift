@@ -334,3 +334,178 @@ struct JourneyStopNote: Codable, Hashable {
         case textName = "txtN"
     }
 }
+
+// MARK: - Journey Position
+
+struct JourneyPosResponse: Decodable {
+    let journeys: [JourneyVehiclePayload]
+
+    enum CodingKeys: String, CodingKey {
+        case journeyPos = "JourneyPos"
+        case journeyPosLower = "journeyPos"
+        case journey = "Journey"
+        case journeyLower = "journey"
+        case journeys
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+
+        if let wrapper = try? container.nestedContainer(keyedBy: CodingKeys.self, forKey: .journeyPos) {
+            journeys = JourneyPosResponse.decodeJourneys(from: wrapper)
+            return
+        }
+        if let wrapper = try? container.nestedContainer(keyedBy: CodingKeys.self, forKey: .journeyPosLower) {
+            journeys = JourneyPosResponse.decodeJourneys(from: wrapper)
+            return
+        }
+        journeys = JourneyPosResponse.decodeJourneys(from: container)
+    }
+
+    private static func decodeJourneys(from container: KeyedDecodingContainer<CodingKeys>) -> [JourneyVehiclePayload] {
+        if let list = try? container.decode([JourneyVehiclePayload].self, forKey: .journey) { return list }
+        if let list = try? container.decode([JourneyVehiclePayload].self, forKey: .journeyLower) { return list }
+        if let list = try? container.decode([JourneyVehiclePayload].self, forKey: .journeys) { return list }
+        if let single = try? container.decode(JourneyVehiclePayload.self, forKey: .journey) { return [single] }
+        if let single = try? container.decode(JourneyVehiclePayload.self, forKey: .journeyLower) { return [single] }
+        return []
+    }
+}
+
+struct JourneyVehiclePayload: Decodable {
+    let jid: String?
+    let line: String?
+    let direction: String?
+    let lat: Double?
+    let lon: Double?
+    let when: String?
+    let realtimeType: String?
+    let idHint: String?
+    let isRealtimeFlag: Bool?
+    let isReportedFlag: Bool?
+    let isCalculatedFlag: Bool?
+    let positionModeHint: String?
+
+    enum CodingKeys: String, CodingKey {
+        case jid
+        case id
+        case line
+        case name
+        case direction
+        case dir
+        case lat
+        case lon
+        case x
+        case y
+        case time
+        case rtTime
+        case timestamp
+        case t
+        case locationType
+        case posType
+        case product
+        case isRealtime
+        case realtime
+        case rt
+        case reported
+        case isReported
+        case calc
+        case isCalculated
+        case positionMode
+        case mode
+        case position = "Position"
+        case positionLower = "position"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        jid = (try? container.decode(String.self, forKey: .jid))
+            ?? (try? container.decode(String.self, forKey: .id))
+        line = (try? container.decode(String.self, forKey: .line))
+            ?? (try? container.decode(String.self, forKey: .name))
+        direction = (try? container.decode(String.self, forKey: .direction))
+            ?? (try? container.decode(String.self, forKey: .dir))
+
+        let topLat = Self.decodeCoordinate(container: container, primary: .lat, fallback: .y, isLatitude: true)
+        let topLon = Self.decodeCoordinate(container: container, primary: .lon, fallback: .x, isLatitude: false)
+
+        if topLat != nil || topLon != nil {
+            lat = topLat
+            lon = topLon
+        } else if let nested = try? container.nestedContainer(keyedBy: CodingKeys.self, forKey: .position) {
+            lat = Self.decodeCoordinate(container: nested, primary: .lat, fallback: .y, isLatitude: true)
+            lon = Self.decodeCoordinate(container: nested, primary: .lon, fallback: .x, isLatitude: false)
+        } else if let nested = try? container.nestedContainer(keyedBy: CodingKeys.self, forKey: .positionLower) {
+            lat = Self.decodeCoordinate(container: nested, primary: .lat, fallback: .y, isLatitude: true)
+            lon = Self.decodeCoordinate(container: nested, primary: .lon, fallback: .x, isLatitude: false)
+        } else {
+            lat = nil
+            lon = nil
+        }
+
+        when = (try? container.decode(String.self, forKey: .timestamp))
+            ?? (try? container.decode(String.self, forKey: .rtTime))
+            ?? (try? container.decode(String.self, forKey: .time))
+            ?? (try? container.decode(String.self, forKey: .t))
+        realtimeType = (try? container.decode(String.self, forKey: .locationType))
+            ?? (try? container.decode(String.self, forKey: .posType))
+            ?? (try? container.decode(String.self, forKey: .product))
+        idHint = (try? container.decode(String.self, forKey: .id))
+        isRealtimeFlag = Self.decodeBool(container: container, keys: [.isRealtime, .realtime, .rt])
+        isReportedFlag = Self.decodeBool(container: container, keys: [.reported, .isReported])
+        isCalculatedFlag = Self.decodeBool(container: container, keys: [.calc, .isCalculated])
+        positionModeHint = (try? container.decode(String.self, forKey: .positionMode))
+            ?? (try? container.decode(String.self, forKey: .mode))
+    }
+
+    private static func decodeCoordinate(
+        container: KeyedDecodingContainer<CodingKeys>,
+        primary: CodingKeys,
+        fallback: CodingKeys,
+        isLatitude: Bool
+    ) -> Double? {
+        let raw = decodeNumber(container: container, key: primary) ?? decodeNumber(container: container, key: fallback)
+        guard var raw else { return nil }
+        let limit = isLatitude ? 90.0 : 180.0
+        if abs(raw) > limit {
+            raw /= 1_000_000.0
+            if abs(raw) > limit {
+                #if DEBUG
+                AppLogger.debug("[JourneyPos] drop invalid coord key=\(primary.stringValue) raw=\(raw)")
+                #endif
+                return nil
+            }
+        }
+        return raw
+    }
+
+    private static func decodeNumber(
+        container: KeyedDecodingContainer<CodingKeys>,
+        key: CodingKeys
+    ) -> Double? {
+        if let v = try? container.decode(Double.self, forKey: key) { return v }
+        if let v = try? container.decode(Int.self, forKey: key) { return Double(v) }
+        if let v = try? container.decode(String.self, forKey: key) { return Double(v) }
+        return nil
+    }
+
+    private static func decodeBool(
+        container: KeyedDecodingContainer<CodingKeys>,
+        keys: [CodingKeys]
+    ) -> Bool? {
+        for key in keys {
+            if let b = try? container.decode(Bool.self, forKey: key) {
+                return b
+            }
+            if let i = try? container.decode(Int.self, forKey: key) {
+                return i != 0
+            }
+            if let s = try? container.decode(String.self, forKey: key) {
+                let lower = s.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                if ["1", "true", "yes", "reported", "rt"].contains(lower) { return true }
+                if ["0", "false", "no", "calc", "estimated"].contains(lower) { return false }
+            }
+        }
+        return nil
+    }
+}

@@ -6,8 +6,17 @@ import UIKit
 /// 说明：
 /// - 展示用户已收藏的站点（站名 + ID）。
 /// - 点击可直接进入对应站点发车板。
+@MainActor
 struct FavoritesView: View {
-    @StateObject private var favoritesManager = FavoritesManager.shared
+    private let dependencies: AppDependencies
+
+    @StateObject private var favoritesManager: FavoritesManager
+
+    init(dependencies: AppDependencies? = nil) {
+        let resolvedDependencies = dependencies ?? AppDependencies.live
+        self.dependencies = resolvedDependencies
+        _favoritesManager = StateObject(wrappedValue: resolvedDependencies.favoritesManager)
+    }
 
     var body: some View {
         NavigationStack {
@@ -32,7 +41,10 @@ struct FavoritesView: View {
                             FavoritesSummaryCard(count: favoritesManager.savedStations.count)
 
                             ForEach(favoritesManager.savedStations) { station in
-                                FavoriteSwipeRow(station: station) {
+                                FavoriteSwipeRow(
+                                    station: station,
+                                    dependencies: dependencies
+                                ) {
                                     remove(station)
                                 }
                             }
@@ -94,6 +106,7 @@ private struct FavoritesSummaryCard: View {
 
 private struct FavoriteSwipeRow: View {
     private let station: FavoriteStation
+    private let dependencies: AppDependencies
     private let onDelete: () -> Void
 
     @State private var offsetX: CGFloat = 0
@@ -142,7 +155,8 @@ private struct FavoriteSwipeRow: View {
                     stationExtId: station.extId,
                     stationGlobalId: station.globalId,
                     stationName: station.name,
-                    stationType: station.type
+                    stationType: station.type,
+                    dependencies: dependencies
                 )
             ) {
                 GlassFavoriteStationCard(station: station)
@@ -175,12 +189,17 @@ private struct FavoriteSwipeRow: View {
         .animation(.spring(response: 0.25, dampingFraction: 0.9), value: isRevealed)
     }
 
-    init(station: FavoriteStation, onDelete: @escaping () -> Void) {
+    init(
+        station: FavoriteStation,
+        dependencies: AppDependencies,
+        onDelete: @escaping () -> Void
+    ) {
         self.station = station
+        self.dependencies = dependencies
         self.onDelete = onDelete
     }
 }
 
 #Preview {
-    FavoritesView()
+    FavoritesView(dependencies: .preview)
 }

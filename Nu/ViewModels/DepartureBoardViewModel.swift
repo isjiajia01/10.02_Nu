@@ -40,26 +40,11 @@ final class DepartureBoardViewModel: ObservableObject {
     @Published private(set) var activePreset: WalkPreset?
     @Published private(set) var isAtStationOverride: Bool = false
 
-    private let apiService: APIServiceProtocol
-    private let stationId: String
-    private let walkingDestinations: [WalkingETADestination]
-    private let locationManager: LocationManaging
-    private let walkingETAService: WalkingETAServiceProtocol
-    private let orService = ORService()
-    private let departureDelayKey = "departure_delay_minutes"
-    private let departureCacheKey: String
-    private let cacheMaxAge: TimeInterval = 90
+    private let departureLoader: DepartureBoardLoader
+    private let delayStore: DepartureDelayStore
+    private let walkingETAController: DepartureWalkingETAController
 
-    private var walkingRefreshTask: Task<Void, Never>?
-    private var lastWalkLocation: CLLocation?
-    private var pendingLocationRetries: Int = 0
-    private let maxLocationRetries = 10
-    private let freshLocationAccuracyThreshold: CLLocationAccuracy = 200
-    private let freshLocationMaxAge: TimeInterval = 120
-    private let usableLocationAccuracyThreshold: CLLocationAccuracy = 1000
-    private let usableLocationMaxAge: TimeInterval = 900
-    private let locatingTimeout: TimeInterval = 20
-    private var locatingStartedAt: Date?
+    private var walkingStateCancellable: AnyCancellable?
 
     enum WalkTimeSource: String {
         case auto
@@ -104,25 +89,32 @@ final class DepartureBoardViewModel: ObservableObject {
         locationManager: LocationManaging? = nil,
         walkingETAService: WalkingETAServiceProtocol? = nil
     ) {
-        self.stationId = stationId
-        self.walkingDestinations = walkingDestinations
-        self.apiService = apiService ?? RejseplanenAPIService()
-        self.locationManager = locationManager ?? LocationManager()
-        self.walkingETAService = walkingETAService ?? WalkingETAService(
-            apiService: self.apiService,
+        let resolvedAPIService = apiService ?? RejseplanenAPIService()
+        let resolvedLocationManager = locationManager ?? LocationManager()
+        let resolvedWalkingETAService = walkingETAService ?? WalkingETAService(
+            apiService: resolvedAPIService,
             overheadSeconds: AppConfig.walkETAOverheadSeconds
         )
-        self.departureCacheKey = "departure_cache_\(stationId)"
 
-        if let saved = UserDefaults.standard.object(forKey: departureDelayKey) as? Int {
-            departureDelayMinutes = min(max(saved, 0), 20)
-        }
-        logWalkETA("state=initial value=nil source=nil isPlaceholder=true")
+        self.departureLoader = DepartureBoardLoader(
+            stationId: stationId,
+            apiService: resolvedAPIService
+        )
+        self.delayStore = DepartureDelayStore()
+        self.walkingETAController = DepartureWalkingETAController(
+            stationId: stationId,
+            walkingDestinations: walkingDestinations,
+            locationManager: resolvedLocationManager,
+            walkingETAService: resolvedWalkingETAService
+        )
+
+        departureDelayMinutes = delayStore.load()
+        bindWalkingController()
+        applyWalkingSnapshot(walkingETAController.snapshot)
     }
 
     deinit {
-        onTheWayCancellable?.cancel()
-        walkingRefreshTask?.cancel()
+        walkingStateCancellable?.cancel()
     }
 
     // MARK: - Fetch
@@ -131,47 +123,21 @@ final class DepartureBoardViewModel: ObservableObject {
         toastMessage = nil
         state = .loading
 
-        do {
-            pendingLocationRetries = 0
-            if !isAtStationOverride {
-                Task { [weak self] in
-                    guard let self else { return }
-                    await self.refreshAutomaticWalkingEstimate(force: true)
-                    self.recomputeCatchDecisions()
-                }
-            }
+        if !isAtStationOverride {
+            _ = await walkingETAController.refreshAutomaticWalkingEstimate(force: true)
+        }
 
-            let result = try await apiService.fetchDepartures(for: stationId)
-            let normalized = Array(
-                Dictionary(
-                    result.map { (($0.journeyRef ?? $0.id), $0) },
-                    uniquingKeysWith: { first, _ in first }
-                ).values
-            )
-            .sorted { lhs, rhs in
-                (lhs.minutesUntilDepartureRaw ?? .max) < (rhs.minutesUntilDepartureRaw ?? .max)
-            }
-
-            departures = normalized
-                .map { orService.enrich($0) }
-                .map { enrichDecisionForCurrentState($0) }
-            activeWalkMode = preferredWalkMode(from: departures)
-            AppCacheStore.save(departures, key: departureCacheKey)
-            isDataStale = false
+        switch await departureLoader.load() {
+        case .success(let loadedDepartures, let isDataStale, let loaderToastMessage):
+            walkingETAController.updateDepartures(loadedDepartures)
+            departures = loadedDepartures.map { enrichDecisionForCurrentState($0) }
+            self.isDataStale = isDataStale
             state = departures.isEmpty ? .empty : .success
-        } catch {
-            let message = AppErrorPresenter.message(for: error, context: .departures)
+            toastMessage = loaderToastMessage
+
+        case .failure(let message):
             if departures.isEmpty {
-                if let cached = AppCacheStore.load([Departure].self, key: departureCacheKey, maxAge: cacheMaxAge) {
-                    departures = cached.value
-                        .map { orService.enrich($0) }
-                        .map { enrichDecisionForCurrentState($0) }
-                    isDataStale = true
-                    state = departures.isEmpty ? .empty : .success
-                    toastMessage = L10n.tr("departures.cache.toast")
-                } else {
-                    state = .error(message)
-                }
+                state = .error(message)
             } else {
                 state = .success
                 isDataStale = true
@@ -186,53 +152,27 @@ final class DepartureBoardViewModel: ObservableObject {
         departureDelayMinutes = min(max(minutes, 0), 20)
         activePreset = nil
         isAtStationOverride = false
-        UserDefaults.standard.set(departureDelayMinutes, forKey: departureDelayKey)
+        delayStore.save(departureDelayMinutes)
         recomputeCatchDecisions()
     }
 
     // MARK: - Presets
 
     func applyAlreadyInStationPreset() {
-        stopOnTheWayUpdates()
-        activePreset = .alreadyInStation
-        isAtStationOverride = true
-        walkTimeSource = .atStation
-        walkMinutes = 1
-        walkBaseMinutes = 1
-        walkP10Minutes = 0
-        walkP90Minutes = 2
-        walkingETAState = .ready
+        _ = walkingETAController.applyAlreadyInStationPreset()
         departureDelayMinutes = 0
         recomputeCatchDecisions()
     }
 
     func applyOnTheWayPreset() {
-        activePreset = .onTheWay
-        isAtStationOverride = false
-        locationManager.requestAuthorization()
-        locationManager.startUpdatingLocation()
-
-        let auth = locationManager.authorizationStatus
-        if auth == .denied || auth == .restricted {
-            walkTimeSource = .estimated
-            walkingETAState = .failed
-            toastMessage = L10n.tr("departures.walking.locationUnavailable")
+        _ = walkingETAController.applyOnTheWayPreset()
+        if walkingETAState == .failed {
             recomputeCatchDecisions()
-            return
-        }
-
-        startOnTheWayUpdates()
-        Task { [weak self] in
-            guard let self else { return }
-            await self.refreshAutomaticWalkingEstimate(force: true)
-            self.recomputeCatchDecisions()
         }
     }
 
     func stopOnTheWayUpdates() {
-        onTheWayCancellable?.cancel()
-        onTheWayCancellable = nil
-        walkingRefreshTask?.cancel()
+        walkingETAController.stopOnTheWayUpdates()
     }
 
     // MARK: - Recompute
@@ -328,212 +268,70 @@ final class DepartureBoardViewModel: ObservableObject {
         "→ \(departure.direction)"
     }
 
-    // MARK: - Private: walking ETA
+    // MARK: - Private
 
-    private var onTheWayCancellable: AnyCancellable?
-
-    private func startOnTheWayUpdates() {
-        onTheWayCancellable?.cancel()
-        onTheWayCancellable = locationManager.currentLocationPublisher
-            .compactMap { $0 }
+    private func bindWalkingController() {
+        walkingStateCancellable = walkingETAController.$snapshot
             .receive(on: RunLoop.main)
-            .sink { [weak self] location in
+            .sink { [weak self] snapshot in
                 guard let self else { return }
-                Task { await self.scheduleWalkRefresh(for: location, force: false) }
+                self.applyWalkingSnapshot(snapshot)
+                if !self.departures.isEmpty {
+                    self.recomputeCatchDecisions()
+                }
             }
     }
 
-    private func scheduleWalkRefresh(for location: CLLocation, force: Bool) async {
-        if !force, let last = lastWalkLocation, location.distance(from: last) < 50 {
-            return
-        }
+    private func applyWalkingSnapshot(_ snapshot: DepartureWalkingETAController.Snapshot) {
+        walkingETAState = mapStatus(snapshot.status)
+        walkMinutes = snapshot.walkMinutes
+        walkBaseMinutes = snapshot.walkBaseMinutes
+        walkTimeSource = mapTimeSource(snapshot.timeSource)
+        walkP10Minutes = snapshot.walkP10Minutes
+        walkP90Minutes = snapshot.walkP90Minutes
+        activeWalkMode = snapshot.activeWalkMode
+        activePreset = mapPreset(snapshot.activePreset)
+        isAtStationOverride = snapshot.isAtStationOverride
 
-        walkingRefreshTask?.cancel()
-        walkingRefreshTask = Task { [weak self] in
-            guard let self else { return }
-            try? await Task.sleep(nanoseconds: 500_000_000)
-            guard !Task.isCancelled else { return }
-            await self.refreshAutomaticWalkingEstimate(force: force)
-            self.recomputeCatchDecisions()
-        }
-    }
-
-    private func refreshAutomaticWalkingEstimate(force: Bool) async {
-        if force || locatingStartedAt == nil {
-            locatingStartedAt = Date()
-        }
-        walkingETAState = .loading
-        if locationManager.authorizationStatus == .notDetermined {
-            locationManager.requestAuthorization()
-        }
-        locationManager.startUpdatingLocation()
-
-        let auth = locationManager.authorizationStatus
-        let isAuthorized = auth == .authorizedWhenInUse || auth == .authorizedAlways
-
-        guard isAuthorized else {
-            logWalkETA("failure reason=unauthorized")
-            applyUnavailableWalkingEstimate()
-            return
-        }
-
-        guard let currentLocation = locationManager.currentLocation else {
-            logWalkETA("failure reason=noLocation")
-            await scheduleLocationRetryIfNeeded()
-            return
-        }
-
-        guard isUsableLocation(currentLocation) else {
-            let age = Int(Date().timeIntervalSince(currentLocation.timestamp))
-            logWalkETA("failure reason=badLocation acc=\(Int(currentLocation.horizontalAccuracy)) ageS=\(age)")
-            await scheduleLocationRetryIfNeeded()
-            return
-        }
-        let isFresh = isFreshLocation(currentLocation)
-        if !isFresh {
-            let age = Int(Date().timeIntervalSince(currentLocation.timestamp))
-            logWalkETA("state=usingStaleLocation acc=\(Int(currentLocation.horizontalAccuracy)) ageS=\(age)")
-        }
-
-        if !force, let last = lastWalkLocation, currentLocation.distance(from: last) < 50 {
-            return
-        }
-
-        do {
-            let age = Int(Date().timeIntervalSince(currentLocation.timestamp))
-            let selectedMode = preferredWalkMode(from: departures)
-            let destination = resolveWalkingStopPoint(for: currentLocation, mode: selectedMode)
-            let destinationCoord = destination.coordinate
-            let destCoordText: String
-            if let destinationCoord {
-                destCoordText = "(\(destinationCoord.latitude),\(destinationCoord.longitude))"
-            } else {
-                destCoordText = "nil"
-            }
-            logWalkETA("origin=(\(currentLocation.coordinate.latitude),\(currentLocation.coordinate.longitude), acc=\(Int(currentLocation.horizontalAccuracy)), ageS=\(age))")
-            logWalkETA("chosenMode=\(selectedMode.rawValue) chosenStopPointId=\(destination.stopId) name=\(destination.name ?? "nil") groupId=\(destination.groupId ?? "nil") stopPointCoord=\(destCoordText)")
-            let eta = try await walkingETAService.fetchWalkETA(
-                origin: currentLocation.coordinate,
-                destination: destination,
-                locationAccuracy: currentLocation.horizontalAccuracy,
-                locationAgeSeconds: Date().timeIntervalSince(currentLocation.timestamp)
-            )
-            applyWalkETA(eta, from: currentLocation)
-            lastWalkLocation = currentLocation
-            pendingLocationRetries = 0
-            locatingStartedAt = nil
-        } catch {
-            logWalkETA("failure reason=requestError detail=\(error.localizedDescription)")
-            await scheduleLocationRetryIfNeeded()
+        if let toast = snapshot.toastMessage {
+            toastMessage = toast
         }
     }
 
-    private func applyWalkETA(_ walkETA: WalkETA, from location: CLLocation) {
-        walkMinutes = Double(max(walkETA.minutes, 1))
-        walkBaseMinutes = walkETA.baseMinutes.map { Double(max($0, 1)) }
-
-        switch walkETA.source {
-        case .hafasWalk:
-            let accuracy = max(location.horizontalAccuracy, 10)
-            let buffer = max(1, min(5, Int(ceil(accuracy / 70.0))))
-            walkP10Minutes = max(walkMinutes - Double(buffer), 0)
-            walkP90Minutes = walkMinutes + Double(buffer)
-            walkTimeSource = .auto
-        case .estimatedFallback:
-            walkP10Minutes = max(walkMinutes - 2.0, 1.0)
-            walkP90Minutes = walkMinutes + 3.0
-            walkTimeSource = .estimated
+    private func mapStatus(_ status: DepartureWalkingETAController.Status) -> WalkingETAState {
+        switch status {
+        case .idle:
+            return .idle
+        case .loading:
+            return .loading
+        case .ready:
+            return .ready
+        case .failed:
+            return .failed
         }
-        walkingETAState = .ready
-        locatingStartedAt = nil
-        logWalkETA("state=ready value=\(Int(walkMinutes.rounded())) source=\(walkETA.source) isPlaceholder=false")
     }
 
-    private func applyUnavailableWalkingEstimate() {
-        walkingETAState = .failed
-        walkBaseMinutes = nil
-        locatingStartedAt = nil
-        logWalkETA("state=failed value=nil source=nil isPlaceholder=false reason=noETA")
-    }
-
-    private func scheduleLocationRetryIfNeeded() async {
-        let elapsed = Date().timeIntervalSince(locatingStartedAt ?? Date())
-        guard elapsed < locatingTimeout, pendingLocationRetries < maxLocationRetries else {
-            applyUnavailableWalkingEstimate()
-            return
+    private func mapTimeSource(_ source: DepartureWalkingETAController.TimeSource) -> WalkTimeSource {
+        switch source {
+        case .auto:
+            return .auto
+        case .estimated:
+            return .estimated
+        case .atStation:
+            return .atStation
         }
-        pendingLocationRetries += 1
-        try? await Task.sleep(nanoseconds: 1_000_000_000)
-        await refreshAutomaticWalkingEstimate(force: false)
     }
 
-    private func isFreshLocation(_ location: CLLocation) -> Bool {
-        let age = Date().timeIntervalSince(location.timestamp)
-        return location.horizontalAccuracy > 0
-            && location.horizontalAccuracy <= freshLocationAccuracyThreshold
-            && age <= freshLocationMaxAge
-    }
-
-    private func isUsableLocation(_ location: CLLocation) -> Bool {
-        let age = Date().timeIntervalSince(location.timestamp)
-        return location.horizontalAccuracy > 0
-            && location.horizontalAccuracy <= usableLocationAccuracyThreshold
-            && age <= usableLocationMaxAge
-    }
-
-    private func logWalkETA(_ message: String) {
-        #if DEBUG
-        fputs("[WalkETA] \(message) stationId=\(stationId)\n", stderr)
-        #endif
-    }
-
-    private func resolveWalkingStopPoint(
-        for location: CLLocation,
-        mode: WalkingETADestination.Mode
-    ) -> WalkingETADestination {
-        let fallback = WalkingETADestination(
-            stopId: stationId,
-            name: nil,
-            groupId: nil,
-            latitude: nil,
-            longitude: nil,
-            mode: .unknown,
-            isRecommended: false
-        )
-        guard !walkingDestinations.isEmpty else { return fallback }
-
-        let modeMatched = walkingDestinations.filter { $0.mode == mode && $0.coordinate != nil }
-        let withCoord = modeMatched.isEmpty
-            ? walkingDestinations.filter { $0.coordinate != nil }
-            : modeMatched
-        guard !withCoord.isEmpty else {
-            return walkingDestinations.first ?? fallback
+    private func mapPreset(_ preset: DepartureWalkingETAController.Preset?) -> WalkPreset? {
+        switch preset {
+        case .alreadyInStation:
+            return .alreadyInStation
+        case .onTheWay:
+            return .onTheWay
+        case nil:
+            return nil
         }
-
-        let nearest = withCoord.min { lhs, rhs in
-            let lhsDistance = CLLocation(latitude: lhs.latitude ?? 0, longitude: lhs.longitude ?? 0).distance(from: location)
-            let rhsDistance = CLLocation(latitude: rhs.latitude ?? 0, longitude: rhs.longitude ?? 0).distance(from: location)
-            return lhsDistance < rhsDistance
-        }
-        let selected = nearest ?? walkingDestinations.first ?? fallback
-        activeWalkMode = selected.mode
-        return selected
     }
-
-    private func preferredWalkMode(from departures: [Departure]) -> WalkingETADestination.Mode {
-        guard let first = departures.sorted(by: {
-            ($0.minutesUntilDepartureRaw ?? .max) < ($1.minutesUntilDepartureRaw ?? .max)
-        }).first else {
-            return .unknown
-        }
-        let text = first.type.uppercased()
-        if text.contains("METRO") { return .metro }
-        if text.contains("TOG") || text.contains("TRAIN") || text.contains("RAIL") { return .tog }
-        if text.contains("BUS") { return .bus }
-        return .unknown
-    }
-
-    // MARK: - Private: decision enrichment
 
     private func enrichDecisionForCurrentState(_ departure: Departure) -> Departure {
         DecisionPolicy.enrichDecision(

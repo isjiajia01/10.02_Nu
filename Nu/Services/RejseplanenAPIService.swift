@@ -1,4 +1,5 @@
 import Foundation
+import CoreLocation
 
 /// Rejseplanen 真实 API 服务实现。
 ///
@@ -291,6 +292,102 @@ final class RejseplanenAPIService: APIServiceProtocol {
         return fallbackResponse.value.journeyDetail
     }
 
+    func resolveTrackingIdentity(
+        from departure: Departure,
+        operationDate: String? = nil
+    ) async throws -> TrackingIdentity {
+        if let ref = departure.journeyRef, !ref.isEmpty {
+            let detail = try? await fetchJourneyDetail(id: ref, date: operationDate)
+            if let jid = extractJID(from: detail?.stops ?? [], fallbackRef: ref) {
+                return TrackingIdentity(
+                    journeyRef: ref,
+                    jid: jid,
+                    line: departure.name,
+                    direction: departure.direction,
+                    plannedOrRealtimeDeparture: departure.effectiveDepartureDate?.date,
+                    matchConfidence: .exact
+                )
+            }
+        }
+
+        return TrackingIdentity(
+            journeyRef: departure.journeyRef,
+            jid: nil,
+            line: departure.name,
+            direction: departure.direction,
+            plannedOrRealtimeDeparture: departure.effectiveDepartureDate?.date,
+            matchConfidence: .heuristic
+        )
+    }
+
+    func fetchJourneyPositions(
+        bbox: JourneyPosBBox,
+        filters: JourneyPosFilters,
+        positionMode: JourneyPosMode = .calcReport
+    ) async throws -> [JourneyVehicle] {
+        var query: [URLQueryItem] = [
+            URLQueryItem(name: "llLat", value: String(bbox.llLat)),
+            URLQueryItem(name: "llLon", value: String(bbox.llLon)),
+            URLQueryItem(name: "urLat", value: String(bbox.urLat)),
+            URLQueryItem(name: "urLon", value: String(bbox.urLon)),
+            URLQueryItem(name: "positionMode", value: positionMode.rawValue)
+        ]
+
+        if let jid = filters.jid, !jid.isEmpty {
+            query.append(URLQueryItem(name: "jid", value: jid))
+        }
+        if !filters.lines.isEmpty {
+            query.append(URLQueryItem(name: "lines", value: filters.lines.joined(separator: ",")))
+        }
+        if !filters.operators.isEmpty {
+            query.append(URLQueryItem(name: "operators", value: filters.operators.joined(separator: ",")))
+        }
+        if !filters.products.isEmpty {
+            query.append(URLQueryItem(name: "products", value: filters.products.joined(separator: ",")))
+        }
+
+        let response: HafasResponse<JourneyPosResponse> = try await client.request(
+            service: .journeyPos,
+            queryItems: query,
+            context: HafasRequestContext(context: [
+                "feature": "journeypos",
+                "mode": positionMode.rawValue
+            ]),
+            bucket: .polling,
+            retryPolicy: .polling
+        )
+
+        #if DEBUG
+        if DebugFlags.journeyPosSamplingEnabled {
+            AppLogger.debug(
+                "[JOURNEYPOS] count=\(response.value.journeys.count) bbox=\(bbox.llLat),\(bbox.llLon) -> \(bbox.urLat),\(bbox.urLon) jid=\(filters.jid ?? "-") lines=\(filters.lines.joined(separator: ","))"
+            )
+            for sample in response.value.journeys.prefix(3) {
+                AppLogger.debug(
+                    "[JOURNEYPOS-SAMPLE] jid=\(sample.jid ?? "-") line=\(sample.line ?? "-") dir=\(sample.direction ?? "-") rtType=\(sample.realtimeType ?? "-") mode=\(sample.positionModeHint ?? "-") isRt=\(sample.isRealtimeFlag?.description ?? "-") reported=\(sample.isReportedFlag?.description ?? "-") calc=\(sample.isCalculatedFlag?.description ?? "-")"
+                )
+            }
+        }
+        #endif
+
+        return response.value.journeys.compactMap { payload in
+            guard let lat = payload.lat, let lon = payload.lon else { return nil }
+            let id = payload.jid ?? payload.idHint ?? [payload.line, payload.direction, payload.when]
+                .compactMap { $0 }
+                .joined(separator: "|")
+            let stableID = id.isEmpty ? "coord:\(lat),\(lon)" : id
+            return JourneyVehicle(
+                id: stableID,
+                jid: payload.jid,
+                line: payload.line,
+                direction: payload.direction,
+                coordinate: CLLocationCoordinate2D(latitude: lat, longitude: lon),
+                lastUpdated: parseJourneyPosTimestamp(payload.when),
+                isReportedPosition: inferReportedPosition(from: payload)
+            )
+        }
+    }
+
     private func normalizeJourneyIDForFullRoute(_ raw: String) -> String {
         var value = raw
         let patterns = [
@@ -389,6 +486,55 @@ final class RejseplanenAPIService: APIServiceProtocol {
         let hour = token.prefix(2)
         let minute = token.suffix(2)
         return "\(hour):\(minute)"
+    }
+
+    private func extractJID(from stops: [JourneyStop], fallbackRef: String) -> String? {
+        for stop in stops {
+            if let noteMatch = stop.notes?.first(where: { note in
+                let key = (note.key ?? "").lowercased()
+                return key.contains("jid") || key.contains("journeyid") || key.contains("tripid")
+            })?.value, !noteMatch.isEmpty {
+                return noteMatch
+            }
+        }
+
+        if fallbackRef.contains("#") {
+            return nil
+        }
+        return fallbackRef.isEmpty ? nil : fallbackRef
+    }
+
+    private func parseJourneyPosTimestamp(_ value: String?) -> Date? {
+        guard let value, !value.isEmpty else { return nil }
+        let iso = ISO8601DateFormatter()
+        if let date = iso.date(from: value) { return date }
+
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(identifier: "Europe/Copenhagen") ?? .current
+        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        return formatter.date(from: value)
+    }
+
+    private func inferReportedPosition(from payload: JourneyVehiclePayload) -> Bool? {
+        if let explicit = payload.isReportedFlag {
+            return explicit
+        }
+        if let explicitCalc = payload.isCalculatedFlag {
+            return !explicitCalc
+        }
+        if let explicitRT = payload.isRealtimeFlag {
+            return explicitRT
+        }
+        if let mode = payload.positionModeHint?.lowercased() {
+            if mode.contains("report") { return true }
+            if mode.contains("calc") || mode.contains("est") { return false }
+        }
+        if let value = payload.realtimeType?.lowercased() {
+            if value.contains("report") || value == "rt" || value.contains("gps") { return true }
+            if value.contains("calc") || value.contains("est") || value.contains("sched") { return false }
+        }
+        return nil
     }
 }
 

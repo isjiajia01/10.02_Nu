@@ -1063,6 +1063,7 @@ private struct MockIntegrationAPIService: APIServiceProtocol {
     var nearbyStopsResult: [StationModel] = []
     var departuresResult: [Departure] = []
     var journeyDetailResult: JourneyDetail = JourneyDetail(stops: [])
+    var journeyPositionsResult: [JourneyVehicle] = []
 
     func fetchNearbyStops(coordX: Double, coordY: Double, radiusMeters: Int?, maxNo: Int?) async throws -> [StationModel] {
         nearbyStopsResult
@@ -1082,6 +1083,25 @@ private struct MockIntegrationAPIService: APIServiceProtocol {
 
     func fetchJourneyDetail(id: String, date: String?) async throws -> JourneyDetail {
         journeyDetailResult
+    }
+
+    func fetchJourneyPositions(
+        bbox: JourneyPosBBox,
+        filters: JourneyPosFilters,
+        positionMode: JourneyPosMode
+    ) async throws -> [JourneyVehicle] {
+        journeyPositionsResult
+    }
+
+    func resolveTrackingIdentity(from departure: Departure, operationDate: String?) async throws -> TrackingIdentity {
+        TrackingIdentity(
+            journeyRef: departure.journeyRef,
+            jid: departure.journeyRef,
+            line: departure.name,
+            direction: departure.direction,
+            plannedOrRealtimeDeparture: departure.effectiveDepartureDate?.date,
+            matchConfidence: departure.journeyRef == nil ? .heuristic : .exact
+        )
     }
 }
 

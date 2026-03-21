@@ -2,7 +2,13 @@ import SwiftUI
 
 @main
 struct NuApp: App {
+    private let dependencies: AppDependencies
+
+    @MainActor
     init() {
+        let dependencies = AppDependencies.live
+        self.dependencies = dependencies
+
         #if DEBUG
         let isRunningTests = ProcessInfo.processInfo.environment["XCTestSessionIdentifier"] != nil
         if !isRunningTests {
@@ -10,7 +16,6 @@ struct NuApp: App {
         }
         #endif
 
-        // 启动时异步加载 /datainfo 产品类别映射（不阻塞 UI）
         Task {
             await ProductClassCache.shared.loadDataInfoIfNeeded(client: HafasClient())
         }
@@ -18,7 +23,7 @@ struct NuApp: App {
 
     var body: some Scene {
         WindowGroup {
-            MainTabView()
+            MainTabView(dependencies: dependencies)
         }
     }
 }

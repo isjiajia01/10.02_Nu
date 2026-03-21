@@ -4,30 +4,41 @@ import SwiftUI
 ///
 /// 说明：
 /// - 采用 Tab 结构，符合规范中的 dashboard 建议。
-/// - 地图页暂用占位，可在后续接入 MapKit。
+/// - 从 `AppDependencies` 注入共享服务，避免在根视图内重复创建长期依赖。
 struct MainTabView: View {
-    @StateObject private var locationManager = LocationManager()
-    @StateObject private var diagnostics = DiagnosticsStore.shared
+    private let dependencies: AppDependencies
+
+    @StateObject private var locationManager: LocationManager
+    @StateObject private var diagnostics: DiagnosticsStore
+    @StateObject private var nearbyViewModel: NearbyStationsViewModel
+
+    init(dependencies: AppDependencies) {
+        self.dependencies = dependencies
+        _locationManager = StateObject(wrappedValue: dependencies.locationManager)
+        _diagnostics = StateObject(wrappedValue: dependencies.diagnosticsStore)
+        _nearbyViewModel = StateObject(wrappedValue: dependencies.makeNearbyStationsViewModel())
+    }
 
     var body: some View {
         TabView {
             NearbyStationsView(
-                viewModel: NearbyStationsViewModel(
-                    apiService: RejseplanenAPIService(),
-                    locationManager: locationManager
-                )
+                viewModel: nearbyViewModel,
+                dependencies: dependencies
             )
-            .tabItem {
-                Label(L10n.tr("tab.stations"), systemImage: "tram.fill")
-            }
+                .tabItem {
+                    Label(L10n.tr("tab.stations"), systemImage: "tram.fill")
+                }
 
-            FavoritesView()
-            .tabItem {
-                Label(L10n.tr("tab.favorites"), systemImage: "heart.fill")
-            }
+            FavoritesView(dependencies: dependencies)
+                .tabItem {
+                    Label(L10n.tr("tab.favorites"), systemImage: "heart.fill")
+                }
 
             NavigationStack {
-                MapView(apiService: RejseplanenAPIService(), locationManager: locationManager)
+                MapView(
+                    apiService: dependencies.apiService,
+                    locationManager: locationManager
+                )
             }
             .tabItem {
                 Label(L10n.tr("tab.map"), systemImage: "map")
@@ -50,5 +61,5 @@ struct MainTabView: View {
 }
 
 #Preview {
-    MainTabView()
+    MainTabView(dependencies: .preview)
 }

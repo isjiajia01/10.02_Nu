@@ -11,6 +11,9 @@ enum APIError: Error, LocalizedError {
     case invalidRequest
     case invalidResponse
     case httpStatus(Int)
+    case rateLimited(retryAfter: TimeInterval?)
+    case unauthorized
+    case forbidden
     case serverMessage(String)
     case decodingFailed
     case network(Error)
@@ -29,6 +32,15 @@ enum APIError: Error, LocalizedError {
             return L10n.tr("error.invalidResponse")
         case .httpStatus(let code):
             return L10n.tr("error.httpStatus", code)
+        case .rateLimited(let retryAfter):
+            if let retryAfter, retryAfter > 0 {
+                return L10n.tr("error.rateLimitedWithRetry", Int(retryAfter.rounded(.up)))
+            }
+            return L10n.tr("error.rateLimited")
+        case .unauthorized:
+            return L10n.tr("error.unauthorized")
+        case .forbidden:
+            return L10n.tr("error.forbidden")
         case .serverMessage(let message):
             return L10n.tr("error.serverMessage", message)
         case .decodingFailed:

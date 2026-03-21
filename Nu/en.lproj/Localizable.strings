@@ -181,6 +181,10 @@
 "error.badRequest" = "Request could not be completed. Please refresh and try again.";
 "error.parsing" = "Received unexpected data format from the server.";
 "error.htmlResponse" = "API returned an HTML page. Please check base URL and accessId.";
+"error.rateLimited" = "Too many requests. Please try again shortly.";
+"error.rateLimitedWithRetry" = "Too many requests. Try again in %d seconds.";
+"error.unauthorized" = "API credentials are invalid or expired.";
+"error.forbidden" = "API access is not allowed for this account.";
 "journeyDetail.fallback.origin" = "Origin";
 "journeyDetail.fallback.destination" = "Destination";
 "stations.group.mergedHint" = "%d stops/entrances";

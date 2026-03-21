@@ -5,10 +5,17 @@ import SwiftUI
 /// 设计目标：
 /// - 使用玻璃拟态卡片替代传统分割线列表。
 /// - 强调“附近 + 导向”信息密度。
+@MainActor
 struct NearbyStationsView: View {
+    private let dependencies: AppDependencies
     @StateObject private var viewModel: NearbyStationsViewModel
 
-    init(viewModel: NearbyStationsViewModel) {
+    init(
+        viewModel: NearbyStationsViewModel,
+        dependencies: AppDependencies? = nil
+    ) {
+        let resolvedDependencies = dependencies ?? AppDependencies.live
+        self.dependencies = resolvedDependencies
         _viewModel = StateObject(wrappedValue: viewModel)
     }
 
@@ -56,7 +63,10 @@ struct NearbyStationsView: View {
 
                             ForEach(viewModel.filteredStationGroups) { group in
                                 NavigationLink(
-                                    destination: StationHubView(group: group)
+                                    destination: StationHubView(
+                                        group: group,
+                                        dependencies: dependencies
+                                    )
                                 ) {
                                     GlassStationCard(group: group)
                                 }
@@ -93,10 +103,12 @@ struct NearbyStationsView: View {
 }
 
 #Preview {
+    let dependencies = AppDependencies.preview
     NearbyStationsView(
         viewModel: NearbyStationsViewModel(
-            apiService: MockAPIService(),
-            locationManager: LocationManager()
-        )
+            apiService: dependencies.apiService,
+            locationManager: dependencies.locationManager
+        ),
+        dependencies: dependencies
     )
 }
