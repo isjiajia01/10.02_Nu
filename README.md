@@ -8,6 +8,8 @@
 
 Native iOS transit experience for nearby discovery, departure tracking, journey drill-down, map exploration, and live vehicle context.
 
+![Nu feature preview](Docs/Images/feature-preview.png)
+
 ## Highlights
 
 - Nearby stations flow driven by user location
