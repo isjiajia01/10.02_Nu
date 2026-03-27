@@ -10,6 +10,43 @@ Native iOS transit experience for nearby discovery, departure tracking, journey 
 
 ![Nu feature preview](Docs/Images/feature-preview.png)
 
+## Features at a Glance
+
+| Area | What it covers |
+| --- | --- |
+| Nearby discovery | Location-driven nearby stations and grouped entrance selection |
+| Departure board | Realtime-aware departures, delay presentation, and catchability context |
+| Journey detail | Stop-by-stop journey breakdown with transport-specific detail handling |
+| Map exploration | Station browsing, deep links, and map-first navigation flows |
+| Vehicle tracking | Live vehicle matching, route overlays, and progress-oriented UI |
+| App quality | Local caching, graceful stale-data fallback, privacy-aware config, and tests |
+
+## Architecture at a Glance
+
+```text
+SwiftUI Views
+    ↓
+ViewModels
+    ↓
+Domain / Services
+    ↓
+Networking / API clients
+    ↓
+Rejseplanen / HAFAS + Apple frameworks
+```
+
+- `Views/` handles presentation and user interaction
+- `ViewModels/` owns screen state, orchestration, and UI-facing decisions
+- `Domain/` contains extracted matching, estimation, and parsing logic
+- `Services/` bridges app features to APIs, location, caching, and platform capabilities
+- `Networking/` isolates request construction and transport concerns
+
+## Screenshots
+
+| Feature Preview | Station Detail / Map Flow |
+| --- | --- |
+| ![Nu screenshot](Docs/Images/feature-preview.png) | ![Nu screenshot detail](Docs/Images/feature-preview.png) |
+
 ## Highlights
 
 - Nearby stations flow driven by user location
