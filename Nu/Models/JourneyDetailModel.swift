@@ -385,6 +385,14 @@ struct JourneyVehiclePayload: Decodable {
     let isReportedFlag: Bool?
     let isCalculatedFlag: Bool?
     let positionModeHint: String?
+    let heading: Double?
+    let stopName: String?
+    let nextStopName: String?
+    let journeyDetailRef: String?
+    let originName: String?
+    let destinationName: String?
+    let productNumber: String?
+    let productOperator: String?
 
     enum CodingKeys: String, CodingKey {
         case jid
@@ -413,6 +421,22 @@ struct JourneyVehiclePayload: Decodable {
         case isCalculated
         case positionMode
         case mode
+        case heading
+        case bearing
+        case headingDeg
+        case stop
+        case currentStop
+        case stopName
+        case nextStop
+        case nextStopName
+        case journeyDetailRef = "JourneyDetailRef"
+        case journeyOrigin = "JourneyOrigin"
+        case journeyDestination = "JourneyDestination"
+        case productNode = "Product"
+        case ref
+        case num
+        case operatorCode = "operatorCode"
+        case operatorName = "operator"
         case position = "Position"
         case positionLower = "position"
     }
@@ -456,6 +480,41 @@ struct JourneyVehiclePayload: Decodable {
         isCalculatedFlag = Self.decodeBool(container: container, keys: [.calc, .isCalculated])
         positionModeHint = (try? container.decode(String.self, forKey: .positionMode))
             ?? (try? container.decode(String.self, forKey: .mode))
+        heading = Self.decodeNumber(container: container, key: .heading)
+            ?? Self.decodeNumber(container: container, key: .bearing)
+            ?? Self.decodeNumber(container: container, key: .headingDeg)
+        stopName = (try? container.decode(String.self, forKey: .stop))
+            ?? (try? container.decode(String.self, forKey: .currentStop))
+            ?? (try? container.decode(String.self, forKey: .stopName))
+        nextStopName = (try? container.decode(String.self, forKey: .nextStop))
+            ?? (try? container.decode(String.self, forKey: .nextStopName))
+
+        if let refContainer = try? container.nestedContainer(keyedBy: CodingKeys.self, forKey: .journeyDetailRef) {
+            journeyDetailRef = (try? refContainer.decode(String.self, forKey: .ref))
+        } else {
+            journeyDetailRef = nil
+        }
+
+        if let originContainer = try? container.nestedContainer(keyedBy: CodingKeys.self, forKey: .journeyOrigin) {
+            originName = (try? originContainer.decode(String.self, forKey: .name))
+        } else {
+            originName = nil
+        }
+
+        if let destinationContainer = try? container.nestedContainer(keyedBy: CodingKeys.self, forKey: .journeyDestination) {
+            destinationName = (try? destinationContainer.decode(String.self, forKey: .name))
+        } else {
+            destinationName = nil
+        }
+
+        if let productContainer = try? container.nestedContainer(keyedBy: CodingKeys.self, forKey: .productNode) {
+            productNumber = (try? productContainer.decode(String.self, forKey: .num))
+            productOperator = (try? productContainer.decode(String.self, forKey: .operatorCode))
+                ?? (try? productContainer.decode(String.self, forKey: .operatorName))
+        } else {
+            productNumber = nil
+            productOperator = nil
+        }
     }
 
     private static func decodeCoordinate(

@@ -8,8 +8,14 @@ final class MapKitWalkingETAService: MapKitWalkingETAServiceProtocol {
         destination: CLLocationCoordinate2D
     ) async throws -> MapKitWalkingETAResult {
         let request = MKDirections.Request()
-        request.source = MKMapItem(placemark: MKPlacemark(coordinate: origin))
-        request.destination = MKMapItem(placemark: MKPlacemark(coordinate: destination))
+        request.source = MKMapItem(
+            location: CLLocation(latitude: origin.latitude, longitude: origin.longitude),
+            address: nil
+        )
+        request.destination = MKMapItem(
+            location: CLLocation(latitude: destination.latitude, longitude: destination.longitude),
+            address: nil
+        )
         request.transportType = .walking
 
         let directions = MKDirections(request: request)

@@ -56,17 +56,20 @@ struct GlassDepartureCard: View {
                     if departure.isDelayed {
                         Image(systemName: "exclamationmark.triangle.fill")
                             .font(.caption)
+                            .accessibilityHidden(true)
                         Text(L10n.tr("departures.delay.minutes", departure.delayMinutes))
                             .font(.caption.weight(.medium))
                             .monospacedDigit()
                     } else if departure.hasRealtimeData {
                         Image(systemName: "checkmark.circle.fill")
                             .font(.caption)
+                            .accessibilityHidden(true)
                         Text(L10n.tr("departures.status.onTime"))
                             .font(.caption.weight(.medium))
                     } else {
                         Image(systemName: "questionmark.circle.fill")
                             .font(.caption)
+                            .accessibilityHidden(true)
                         Text(L10n.tr("departures.status.scheduled"))
                             .font(.caption.weight(.medium))
                     }

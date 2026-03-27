@@ -357,33 +357,28 @@ final class RejseplanenAPIService: APIServiceProtocol {
             retryPolicy: .polling
         )
 
-        #if DEBUG
-        if DebugFlags.journeyPosSamplingEnabled {
-            AppLogger.debug(
-                "[JOURNEYPOS] count=\(response.value.journeys.count) bbox=\(bbox.llLat),\(bbox.llLon) -> \(bbox.urLat),\(bbox.urLon) jid=\(filters.jid ?? "-") lines=\(filters.lines.joined(separator: ","))"
-            )
-            for sample in response.value.journeys.prefix(3) {
-                AppLogger.debug(
-                    "[JOURNEYPOS-SAMPLE] jid=\(sample.jid ?? "-") line=\(sample.line ?? "-") dir=\(sample.direction ?? "-") rtType=\(sample.realtimeType ?? "-") mode=\(sample.positionModeHint ?? "-") isRt=\(sample.isRealtimeFlag?.description ?? "-") reported=\(sample.isReportedFlag?.description ?? "-") calc=\(sample.isCalculatedFlag?.description ?? "-")"
-                )
-            }
-        }
-        #endif
-
         return response.value.journeys.compactMap { payload in
             guard let lat = payload.lat, let lon = payload.lon else { return nil }
-            let id = payload.jid ?? payload.idHint ?? [payload.line, payload.direction, payload.when]
+            let id = payload.jid ?? payload.journeyDetailRef ?? payload.idHint ?? [payload.line, payload.direction, payload.when]
                 .compactMap { $0 }
                 .joined(separator: "|")
             let stableID = id.isEmpty ? "coord:\(lat),\(lon)" : id
             return JourneyVehicle(
                 id: stableID,
                 jid: payload.jid,
+                journeyDetailRef: payload.journeyDetailRef,
                 line: payload.line,
                 direction: payload.direction,
                 coordinate: CLLocationCoordinate2D(latitude: lat, longitude: lon),
                 lastUpdated: parseJourneyPosTimestamp(payload.when),
-                isReportedPosition: inferReportedPosition(from: payload)
+                isReportedPosition: inferReportedPosition(from: payload),
+                heading: payload.heading,
+                stopName: payload.stopName,
+                nextStopName: payload.nextStopName,
+                originName: payload.originName,
+                destinationName: payload.destinationName,
+                productNumber: payload.productNumber,
+                productOperator: payload.productOperator
             )
         }
     }

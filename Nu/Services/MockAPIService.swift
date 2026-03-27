@@ -131,11 +131,19 @@ final class MockAPIService: APIServiceProtocol {
             JourneyVehicle(
                 id: filters.jid ?? "mock-vehicle-1",
                 jid: filters.jid ?? "mock-vehicle-1",
+                journeyDetailRef: filters.jid ?? "mock-vehicle-1",
                 line: filters.lines.first ?? "5C",
                 direction: "Lufthavnen",
                 coordinate: coordinate,
                 lastUpdated: Date(),
-                isReportedPosition: true
+                isReportedPosition: true,
+                heading: 45,
+                stopName: "København H",
+                nextStopName: "Rådhuspladsen",
+                originName: "Herlev Hospital",
+                destinationName: "Københavns Lufthavn",
+                productNumber: filters.lines.first ?? "5C",
+                productOperator: "mock"
             )
         ]
     }

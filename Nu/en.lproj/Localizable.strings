@@ -1,11 +1,15 @@
 "tab.stations" = "Stations";
 "tab.favorites" = "Favorites";
 "tab.map" = "Map";
+"tab.settings" = "Settings";
 
 "common.loadFailed" = "Load failed";
 "common.adjust" = "Adjust";
 "common.collapse" = "Collapse";
+"common.more" = "More";
 "common.min" = "min";
+"common.close" = "Close";
+"common.save" = "Save";
 "common.realtime" = "Realtime";
 "common.scheduled" = "Scheduled";
 
@@ -47,6 +51,8 @@
 "favorites.card.accessibility.label" = "%@, %@";
 "favorites.card.accessibility.value" = "Station ID %@";
 "favorites.card.accessibility.hint" = "Double-tap to view departures for this station";
+"settings.title" = "Settings";
+"settings.footer" = "API settings are stored locally on this device.";
 
 "departures.title" = "Departure Board";
 "departures.loading" = "Loading departures...";
@@ -101,6 +107,11 @@
 
 "map.title" = "Map";
 "map.loading" = "Loading stations...";
+"map.myLocation" = "My Location";
+"map.nearbyStations" = "Nearby stations";
+"map.minimal.description" = "Only nearby stations are shown here. Tap a station below for details.";
+"map.empty.title" = "No stations found";
+"map.empty.description" = "No nearby stations are available for this map area right now.";
 "map.locating" = "Locating...";
 "map.loadFailed.title" = "Map failed to load";
 "map.loadFailed.description" = "Unable to load map stations. Please try again.";
@@ -111,6 +122,7 @@
 "map.locationFallback" = "Location seems invalid. Falling back to Copenhagen. Check simulator Features > Location.";
 "map.pin.accessibility.hint" = "Double-tap to open departures for this station";
 "map.searchThisArea.hint" = "Requests station data for the currently visible map region.";
+"map.recenter" = "Recenter";
 
 "journeyDetail.title" = "Journey Detail";
 "journeyDetail.loading" = "Loading journey details...";
@@ -150,10 +162,26 @@
 "journeyDetail.menu.arr" = "Arr: %@";
 "journeyDetail.menu.rtDep" = "RT Dep: %@";
 "journeyDetail.menu.rtArr" = "RT Arr: %@";
+"journeyDetail.trackVehicle" = "Track vehicle";
 "journeyDetail.status.between" = "Vehicle is estimated between %@ → %@";
 "journeyDetail.status.at" = "Vehicle is currently at %@";
 "journeyDetail.status.nearDestination" = "Vehicle is close to destination";
 "journeyDetail.status.unknown" = "Vehicle position is currently unknown";
+"tracking.vehicle.fallback" = "Vehicle";
+"tracking.vehicle.noDirection" = "Direction unavailable";
+"tracking.vehicle.nextStop" = "Next stop: %@";
+"tracking.vehicle.currentStop" = "Current stop: %@";
+"tracking.vehicle.coordinates" = "Lat %@ · Lon %@";
+"tracking.resetPrimary" = "Back to primary vehicle";
+"tracking.sheet.title" = "Stop sequence";
+"tracking.sheet.open" = "Stops";
+"tracking.sheet.selectedVehicle" = "Selected vehicle";
+"tracking.sheet.nextStop" = "Approaching %@";
+"tracking.sheet.current" = "Now";
+"tracking.sheet.passed" = "Passed · %@";
+"tracking.sheet.currentEta" = "Current stop · %@";
+"tracking.sheet.upcomingEta" = "%@ · ~%d min";
+"tracking.sheet.scheduledEta" = "%@";
 
 "catch.likely" = "Likely";
 "catch.tight" = "Tight";
@@ -167,8 +195,8 @@
 "reliability.a11y.medium" = "Medium reliability";
 "reliability.a11y.low" = "Low reliability, for reference only";
 
-"error.invalidBaseURL" = "API base URL is missing. Please configure Base URL in AppConfig.";
-"error.missingAccessID" = "API accessId is missing. Please configure accessId in AppConfig.";
+"error.invalidBaseURL" = "API base URL is invalid. Open API Settings and update the Rejseplanen base URL.";
+"error.missingAccessID" = "API accessId is missing. Open API Settings and add your Rejseplanen accessId.";
 "error.invalidRequest" = "Invalid request parameters. Please try again.";
 "error.invalidResponse" = "The server returned an invalid response.";
 "error.httpStatus" = "Server error (HTTP %d).";
@@ -196,3 +224,11 @@
 "stations.hub.mode.all" = "All";
 "stations.hub.mode.mixed" = "MIXED";
 "map.searchThisArea" = "Search this area";
+"settings.api.title" = "Rejseplanen API";
+"settings.api.section" = "Credentials";
+"settings.api.accessID" = "accessId";
+"settings.api.version" = "API version";
+"settings.api.bearer" = "Bearer token";
+"settings.api.footer" = "These values are stored on this device and used for subsequent API requests.";
+"settings.api.invalidBaseURL" = "Base URL is invalid.";
+"settings.api.reset" = "Reset to defaults";

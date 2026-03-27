@@ -95,10 +95,13 @@ final class AppDependencies {
         )
     }
 
-    func makeMapViewModel() -> MapViewModel {
+    func makeMapViewModel(
+        debugScenario: MapViewModel.DebugScenario = .live
+    ) -> MapViewModel {
         MapViewModel(
             apiService: apiService,
-            locationManager: locationManager
+            locationManager: locationManager,
+            debugScenario: debugScenario
         )
     }
 

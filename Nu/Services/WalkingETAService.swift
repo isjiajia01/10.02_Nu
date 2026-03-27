@@ -1,13 +1,18 @@
 import Foundation
 import CoreLocation
 
-final class WalkingETAService: WalkingETAServiceProtocol {
-    struct WalkLegMetric: Equatable {
+nonisolated final class WalkingETAService: WalkingETAServiceProtocol {
+    nonisolated struct WalkLegMetric: Equatable {
         let durationSeconds: Int?
         let distanceMeters: Int?
     }
 
-    private struct CacheKey: Hashable {
+    typealias HafasWalkMetricsProvider = @Sendable (
+        _ origin: CLLocationCoordinate2D,
+        _ destination: WalkingETADestination
+    ) async throws -> [WalkLegMetric]?
+
+    nonisolated private struct CacheKey: Hashable {
         let destinationId: String
         let latBucket: Int
         let lonBucket: Int
@@ -31,12 +36,12 @@ final class WalkingETAService: WalkingETAServiceProtocol {
         }
     }
 
-    private struct CacheEntry {
+    nonisolated private struct CacheEntry {
         let timestamp: Date
         let value: WalkETA
     }
 
-    private struct HafasWalkCandidate {
+    nonisolated private struct HafasWalkCandidate {
         let seconds: Int
         let distanceMeters: Int?
         let legCount: Int
@@ -49,6 +54,7 @@ final class WalkingETAService: WalkingETAServiceProtocol {
     private let mapKitService: MapKitWalkingETAServiceProtocol?
     private let clock: ClockProtocol
     private let overheadSeconds: Int
+    private let hafasWalkMetricsProvider: HafasWalkMetricsProvider?
     private let cacheTTL: TimeInterval = 60
     private var cache: [CacheKey: CacheEntry] = [:]
     private let cacheLock = NSLock()
@@ -58,13 +64,15 @@ final class WalkingETAService: WalkingETAServiceProtocol {
         apiService: APIServiceProtocol,
         clock: ClockProtocol = SystemClock(),
         mapKitService: MapKitWalkingETAServiceProtocol? = nil,
-        overheadSeconds: Int? = nil
+        overheadSeconds: Int? = nil,
+        hafasWalkMetricsProvider: HafasWalkMetricsProvider? = nil
     ) {
         self.client = client
         self.apiService = apiService
         self.clock = clock
         self.mapKitService = mapKitService
         self.overheadSeconds = max(0, overheadSeconds ?? AppConfig.walkETAOverheadSeconds)
+        self.hafasWalkMetricsProvider = hafasWalkMetricsProvider
     }
 
     func fetchWalkETA(
@@ -76,19 +84,14 @@ final class WalkingETAService: WalkingETAServiceProtocol {
         let key = CacheKey(destinationId: destination.stopId, coordinate: origin, timestamp: clock.now)
 
         if let cached = cachedValue(for: key), clock.now.timeIntervalSince(cached.timestamp) <= cacheTTL {
-            logStructured(
-                origin: origin,
-                destination: destination,
-                locationAccuracy: locationAccuracy,
-                locationAgeSeconds: locationAgeSeconds,
-                hafasCandidate: nil,
-                mapKitCandidate: nil,
-                mapKitError: nil,
-                model: nil,
-                finalSource: cached.value.source,
-                cacheStatus: "HIT"
+            let cachedValue = WalkETA(
+                minutes: cached.value.minutes,
+                baseMinutes: cached.value.baseMinutes,
+                distanceMeters: cached.value.distanceMeters,
+                source: cached.value.source
             )
-            return cached.value
+            WalkETADebugLogger.log("cache=HIT destStopId=\(destination.stopId)")
+            return cachedValue
         }
 
         let hafasCandidate = await fetchHafasCandidate(origin: origin, destination: destination)
@@ -148,6 +151,28 @@ final class WalkingETAService: WalkingETAServiceProtocol {
     }
 
     private func fetchHafasCandidate(origin: CLLocationCoordinate2D, destination: WalkingETADestination) async -> HafasWalkCandidate? {
+        if let hafasWalkMetricsProvider {
+            do {
+                guard let metrics = try await hafasWalkMetricsProvider(origin, destination),
+                      let summary = Self.selectWalkingSummary(from: metrics)
+                else {
+                    WalkETADebugLogger.log("hafas failure reason=noInjectedWalkLeg")
+                    return nil
+                }
+
+                return HafasWalkCandidate(
+                    seconds: summary.totalDurationSeconds,
+                    distanceMeters: summary.totalDistanceMeters,
+                    legCount: metrics.count,
+                    selectedTripIdx: 0,
+                    usedField: summary.usedField
+                )
+            } catch {
+                WalkETADebugLogger.log("hafas failure reason=injectedProvider detail=\(error.localizedDescription)")
+                return nil
+            }
+        }
+
         var queryItems = [
             URLQueryItem(name: "originCoordLat", value: String(origin.latitude)),
             URLQueryItem(name: "originCoordLong", value: String(origin.longitude)),

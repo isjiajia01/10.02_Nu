@@ -7,6 +7,10 @@ struct VehicleTrackingMapView: View {
     let apiService: APIServiceProtocol
 
     @StateObject private var vm: VehicleTrackingViewModel
+    @State private var selectedSheetDetent: PresentationDetent = .medium
+    @State private var selectedVehicle: JourneyVehicle?
+    @State private var isStopSequencePresented = false
+    @State private var cardState: VehicleCardState = .compact
 
     init(
         departure: Departure,
@@ -31,80 +35,95 @@ struct VehicleTrackingMapView: View {
     }
 
     var body: some View {
-        ZStack(alignment: .top) {
+        ZStack(alignment: .bottom) {
             VehicleTrackingMapRepresentable(
                 vehicle: vm.trackedVehicle,
                 nearbyVehicles: vm.nearbyLineVehicles,
                 routeCoordinates: vm.routeCoordinates,
+                centerOnVehicleCoordinate: vm.mapCenterCoordinate,
+                selectedVehicleID: selectedVehicle?.id ?? vm.trackedVehicle?.id,
+                highlightedVehicleCoordinate: (selectedVehicle ?? vm.trackedVehicle)?.coordinate,
                 displayGeneration: vm.displayGeneration,
                 isInteracting: vm.isInteracting,
                 region: $vm.visibleRegion,
                 onInteractionStart: { vm.pauseForInteraction() },
-                onInteractionEnd: { vm.resumeAfterInteraction() }
+                onInteractionEnd: { vm.resumeAfterInteraction() },
+                onVehicleSelection: { vehicle in
+                    selectedVehicle = vehicle
+                }
             )
             .ignoresSafeArea()
 
-            VStack(spacing: 8) {
+            VStack {
                 switch vm.state {
                 case .loading:
-                    statusPill(text: "Resolving vehicle identity…")
-                case .tracking:
-                    statusPill(text: vm.statusText)
-                    HStack(spacing: 8) {
-                        LastUpdatedPill(lastUpdateDate: vm.lastUpdateDate)
-                        statusPill(text: vm.motionState.label, color: vm.motionState == .moving ? .green : .orange)
-                    }
+                    VehicleTrackingFloatingMessage(text: "Resolving vehicle identity…")
                 case .empty:
-                    statusPill(text: vm.statusText.isEmpty ? "No matching vehicle in this area" : vm.statusText)
+                    VehicleTrackingFloatingMessage(text: vm.statusText.isEmpty ? "No matching vehicle in this area" : vm.statusText)
                 case .blocked(let msg):
-                    statusPill(text: msg, color: .red)
+                    VehicleTrackingFloatingMessage(text: msg, color: .red)
                 case .failed(let msg):
-                    statusPill(text: msg, color: .orange)
-                case .idle:
+                    VehicleTrackingFloatingMessage(text: msg, color: .orange)
+                case .tracking, .idle:
                     EmptyView()
                 }
                 Spacer()
             }
-            .padding(.top, 12)
-            .padding(.horizontal, 12)
+            .padding(.horizontal, VehicleTrackingUI.horizontalPadding)
+            .padding(.top, VehicleTrackingUI.topOverlayPadding)
+
+            if let vehicle = selectedVehicle ?? vm.trackedVehicle,
+               vm.state == .tracking || !vm.routeStops.isEmpty {
+                VehicleTrackingBottomCard(
+                    vehicle: vehicle,
+                    motionLabel: vm.motionState.label,
+                    motionColor: vm.motionState == .moving ? .green : .orange,
+                    lastUpdateDate: vm.lastUpdateDate,
+                    statusText: vm.statusText,
+                    routeStopsAvailable: !vm.routeStops.isEmpty,
+                    isShowingAlternateVehicle: isShowingAlternateVehicle,
+                    onResetToPrimary: { selectedVehicle = vm.trackedVehicle },
+                    onOpenStops: { isStopSequencePresented = true },
+                    cardState: $cardState
+                )
+                    .padding(.horizontal, VehicleTrackingUI.horizontalPadding)
+                    .padding(.bottom, 12)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
         }
         .navigationTitle("Vehicle")
         .navigationBarTitleDisplayMode(.inline)
         .onAppear { vm.start() }
         .onDisappear { vm.stop() }
-    }
-
-    private func statusPill(text: String, color: Color = .indigo) -> some View {
-        Text(text)
-            .font(.caption.weight(.semibold))
-            .foregroundStyle(.white)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .background(color.opacity(0.9))
-            .clipShape(Capsule())
-    }
-}
-
-// MARK: - P0-3: local-only timer for "Updated Xs ago" text
-
-private struct LastUpdatedPill: View {
-    let lastUpdateDate: Date?
-
-    var body: some View {
-        TimelineView(.periodic(from: .now, by: 1)) { _ in
-            Text(labelText)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.white)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .background(Color.teal.opacity(0.9))
-                .clipShape(Capsule())
+        .onChange(of: vm.trackedVehicle?.id) { _, _ in
+            if selectedVehicle == nil {
+                selectedVehicle = vm.trackedVehicle
+            }
+            isStopSequencePresented = shouldPresentStopSequence
+        }
+        .onChange(of: vm.routeStops.count) { _, _ in
+            isStopSequencePresented = shouldPresentStopSequence
+        }
+        .sheet(isPresented: $isStopSequencePresented) {
+            if let vehicle = selectedVehicle ?? vm.trackedVehicle, !vm.routeStops.isEmpty {
+                VehicleStopSequenceSheet(
+                    vehicle: vehicle,
+                    departure: departure,
+                    stops: vm.routeStops,
+                    onClose: { isStopSequencePresented = false }
+                )
+                .presentationDetents([.medium, .large], selection: $selectedSheetDetent)
+                .presentationDragIndicator(.visible)
+            }
         }
     }
 
-    private var labelText: String {
-        guard let lastUpdateDate else { return "Updated —" }
-        let age = Int(max(0, Date().timeIntervalSince(lastUpdateDate)))
-        return "Updated \(age)s ago"
+    private var isShowingAlternateVehicle: Bool {
+        guard let selectedVehicle, let trackedVehicle = vm.trackedVehicle else { return false }
+        return selectedVehicle.id != trackedVehicle.id
+    }
+
+    private var shouldPresentStopSequence: Bool {
+        (selectedVehicle ?? vm.trackedVehicle) != nil && !vm.routeStops.isEmpty
     }
 }

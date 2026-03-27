@@ -4,6 +4,69 @@ import CoreLocation
 import Combine
 
 final class NuCoreTests: XCTestCase {
+    func testAppConfigResolvedAPISettingsPrefersPersistedValues() throws {
+        let suiteName = "NuCoreTests.AppConfig.\(UUID().uuidString)"
+        guard let defaults = UserDefaults(suiteName: suiteName) else {
+            return XCTFail("Expected isolated UserDefaults suite")
+        }
+        defer {
+            defaults.removePersistentDomain(forName: suiteName)
+        }
+
+        AppConfig.saveAPISettings(
+            baseURLString: "https://example.com/hafas",
+            accessID: "user-access-id",
+            apiVersion: "v1",
+            authorizationBearerToken: "secret-token",
+            storage: defaults
+        )
+
+        let settings = AppConfig.resolvedAPISettings(
+            environment: [:],
+            bundleInfo: [:],
+            storage: defaults
+        )
+
+        XCTAssertEqual(settings.baseURLString, "https://example.com/hafas")
+        XCTAssertEqual(settings.accessID, "user-access-id")
+        XCTAssertEqual(settings.apiVersion, "v1")
+        XCTAssertEqual(settings.authorizationBearerToken, "secret-token")
+    }
+
+    func testAppConfigResolvedAPISettingsUsesEnvironmentOverride() throws {
+        let suiteName = "NuCoreTests.AppConfigEnv.\(UUID().uuidString)"
+        guard let defaults = UserDefaults(suiteName: suiteName) else {
+            return XCTFail("Expected isolated UserDefaults suite")
+        }
+        defer {
+            defaults.removePersistentDomain(forName: suiteName)
+        }
+
+        AppConfig.saveAPISettings(
+            baseURLString: "https://persisted.example/api",
+            accessID: "persisted-id",
+            apiVersion: "persisted-version",
+            authorizationBearerToken: "persisted-token",
+            storage: defaults
+        )
+
+        let settings = AppConfig.resolvedAPISettings(
+            environment: [
+                "REJSEPLANEN_BASE_URL": "https://env.example/api",
+                "REJSEPLANEN_ACCESS_ID": "env-access-id",
+                "REJSEPLANEN_API_VERSION": "env-version",
+                "REJSEPLANEN_AUTH_BEARER": "env-token"
+            ],
+            bundleInfo: [:],
+            storage: defaults
+        )
+
+        XCTAssertEqual(settings.baseURLString, "https://env.example/api")
+        XCTAssertEqual(settings.accessID, "env-access-id")
+        XCTAssertEqual(settings.apiVersion, "env-version")
+        XCTAssertEqual(settings.authorizationBearerToken, "env-token")
+    }
+
     func testJourneyDetailURLEncodingEncodesPipe() throws {
         let rawJourneyID = "2|#VN#1#ST#1770890916#"
         let encoded = HafasClient.encodeQueryValue(rawJourneyID)
@@ -751,42 +814,18 @@ final class NuCoreTests: XCTestCase {
     }
 
     func testWalkingETA_SkyttegadeTripChainAndCache() async throws {
-        URLProtocolMock.requestCount = 0
-        URLProtocolMock.testData = """
-        {
-          "TripList": {
-            "Trip": [{
-              "LegList": {
-                "Leg": [
-                  {
-                    "type": "WALK",
-                    "duration": "00:02:00",
-                    "dist": 180,
-                    "Origin": { "name": "Street A" },
-                    "Destination": { "name": "Transfer Hall" }
-                  },
-                  {
-                    "type": "WALK",
-                    "duration": "00:04:00",
-                    "dist": 320,
-                    "Origin": { "name": "Transfer Hall" },
-                    "Destination": { "name": "Skyttegade" }
-                  }
-                ]
-              }
-            }]
-          }
-        }
-        """.data(using: .utf8)
-
-        let config = URLSessionConfiguration.ephemeral
-        config.protocolClasses = [URLProtocolMock.self]
-        let session = URLSession(configuration: config)
+        let requestCounter = LockedCounter()
         let service = WalkingETAService(
-            client: HafasClient(session: session),
             apiService: MockIntegrationAPIService(),
             mapKitService: MockMapKitWalkingETAService(result: nil),
-            overheadSeconds: 45
+            overheadSeconds: 45,
+            hafasWalkMetricsProvider: { _, _ in
+                await requestCounter.increment()
+                return [
+                    .init(durationSeconds: 120, distanceMeters: 180),
+                    .init(durationSeconds: 240, distanceMeters: 320)
+                ]
+            }
         )
         let origin = CLLocationCoordinate2D(latitude: 55.6871, longitude: 12.5458)
 
@@ -811,40 +850,21 @@ final class NuCoreTests: XCTestCase {
             locationAccuracy: 20,
             locationAgeSeconds: 1
         )
+        let requestCount = await requestCounter.value
 
         XCTAssertEqual(first.minutes, 6, "Should apply dynamic conservative buffer after picking the main WALK leg")
         XCTAssertEqual(second.minutes, 6, "Second fetch should return cached value")
-        XCTAssertEqual(URLProtocolMock.requestCount, 1, "Second fetch should hit in-memory cache")
+        XCTAssertEqual(requestCount, 1, "Second fetch should hit in-memory cache")
     }
 
     func testWalkingETA_FinalNotLowerThanMapKit() async throws {
-        URLProtocolMock.requestCount = 0
-        URLProtocolMock.testData = """
-        {
-          "TripList": {
-            "Trip": [{
-              "LegList": {
-                "Leg": [{
-                  "type": "WALK",
-                  "duration": "00:04:00",
-                  "dist": 320,
-                  "Origin": { "name": "A" },
-                  "Destination": { "name": "B" }
-                }]
-              }
-            }]
-          }
-        }
-        """.data(using: .utf8)
-
-        let config = URLSessionConfiguration.ephemeral
-        config.protocolClasses = [URLProtocolMock.self]
-        let session = URLSession(configuration: config)
         let service = WalkingETAService(
-            client: HafasClient(session: session),
             apiService: MockIntegrationAPIService(),
             mapKitService: MockMapKitWalkingETAService(result: .init(expectedSeconds: 600, distanceMeters: 700)),
-            overheadSeconds: 45
+            overheadSeconds: 45,
+            hafasWalkMetricsProvider: { _, _ in
+                [.init(durationSeconds: 240, distanceMeters: 320)]
+            }
         )
 
         let eta = try await service.fetchWalkETA(
@@ -1133,6 +1153,14 @@ private actor TrackingWalkingETAService: WalkingETAServiceProtocol {
     ) async throws -> WalkETA {
         lastDestination = destination
         return WalkETA(minutes: 4, baseMinutes: 3, distanceMeters: 320, source: .hafasWalk)
+    }
+}
+
+private actor LockedCounter {
+    private(set) var value: Int = 0
+
+    func increment() {
+        value += 1
     }
 }
 

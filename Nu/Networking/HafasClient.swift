@@ -1,6 +1,6 @@
 import Foundation
 
-enum HafasServicePath: String {
+nonisolated enum HafasServicePath: String {
     case nearbyStops = "location.nearbystops"
     case locationName = "location.name"
     case departureBoard = "departureBoard"
@@ -11,7 +11,7 @@ enum HafasServicePath: String {
     case dataInfo = "datainfo"
 }
 
-struct HafasRequestContext: Sendable {
+nonisolated struct HafasRequestContext: Sendable {
     let requestId: String
     let context: [String: String]
 
@@ -21,12 +21,12 @@ struct HafasRequestContext: Sendable {
     }
 }
 
-private struct HafasResWrapper<T: Decodable>: Decodable {
+nonisolated private struct HafasResWrapper<T: Decodable>: Decodable {
     let res: T
 }
 
-struct HafasWarningsContainer: Decodable {
-    struct Warning: Decodable, Hashable {
+nonisolated struct HafasWarningsContainer: Decodable {
+    nonisolated struct Warning: Decodable, Hashable {
         let code: String?
         let text: String?
     }
@@ -50,7 +50,7 @@ struct HafasWarningsContainer: Decodable {
     }
 }
 
-enum HafasDecoder {
+nonisolated enum HafasDecoder {
     nonisolated static func decode<T: Decodable>(_ type: T.Type, from data: Data, decoder: JSONDecoder) throws -> T {
         if let direct = try? decoder.decode(T.self, from: data) {
             return direct
@@ -64,26 +64,26 @@ enum HafasDecoder {
     }
 }
 
-struct HafasResponse<T: Decodable> {
+nonisolated struct HafasResponse<T: Decodable> {
     nonisolated let value: T
     nonisolated let warnings: [HafasWarningsContainer.Warning]
     nonisolated let requestId: String
     nonisolated let context: [String: String]
 }
 
-enum HafasRequestBucket {
+nonisolated enum HafasRequestBucket {
     case general
     case polling
 }
 
-struct HafasRetryPolicy {
+nonisolated struct HafasRetryPolicy {
     let maxRetries: Int
     let initialDelaySeconds: TimeInterval
     let maxDelaySeconds: TimeInterval
 
-    static let standard = HafasRetryPolicy(maxRetries: 2, initialDelaySeconds: 0.5, maxDelaySeconds: 3)
-    static let polling = HafasRetryPolicy(maxRetries: 3, initialDelaySeconds: 0.5, maxDelaySeconds: 5)
-    static let disabled = HafasRetryPolicy(maxRetries: 0, initialDelaySeconds: 0, maxDelaySeconds: 0)
+    nonisolated static let standard = HafasRetryPolicy(maxRetries: 2, initialDelaySeconds: 0.5, maxDelaySeconds: 3)
+    nonisolated static let polling = HafasRetryPolicy(maxRetries: 3, initialDelaySeconds: 0.5, maxDelaySeconds: 5)
+    nonisolated static let disabled = HafasRetryPolicy(maxRetries: 0, initialDelaySeconds: 0, maxDelaySeconds: 0)
 }
 
 actor RequestRateLimiter {
@@ -104,7 +104,7 @@ actor RequestRateLimiter {
     }
 }
 
-final class HafasClient {
+nonisolated final class HafasClient {
     private let session: URLSession
     private let decoder: JSONDecoder
     private let generalLimiter: RequestRateLimiter

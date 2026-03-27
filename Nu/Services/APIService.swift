@@ -224,21 +224,37 @@ struct TrackingIdentity: Sendable, Equatable {
 struct JourneyVehicle: Sendable, Equatable, Identifiable {
     let id: String
     let jid: String?
+    let journeyDetailRef: String?
     let line: String?
     let direction: String?
     let coordinate: CLLocationCoordinate2D
     let lastUpdated: Date?
     let isReportedPosition: Bool?
+    let heading: Double?
+    let stopName: String?
+    let nextStopName: String?
+    let originName: String?
+    let destinationName: String?
+    let productNumber: String?
+    let productOperator: String?
 
     static func == (lhs: JourneyVehicle, rhs: JourneyVehicle) -> Bool {
         lhs.id == rhs.id
             && lhs.jid == rhs.jid
+            && lhs.journeyDetailRef == rhs.journeyDetailRef
             && lhs.line == rhs.line
             && lhs.direction == rhs.direction
             && lhs.coordinate.latitude == rhs.coordinate.latitude
             && lhs.coordinate.longitude == rhs.coordinate.longitude
             && lhs.lastUpdated == rhs.lastUpdated
             && lhs.isReportedPosition == rhs.isReportedPosition
+            && lhs.heading == rhs.heading
+            && lhs.stopName == rhs.stopName
+            && lhs.nextStopName == rhs.nextStopName
+            && lhs.originName == rhs.originName
+            && lhs.destinationName == rhs.destinationName
+            && lhs.productNumber == rhs.productNumber
+            && lhs.productOperator == rhs.productOperator
     }
 }
 

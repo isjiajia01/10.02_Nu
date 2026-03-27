@@ -6,7 +6,12 @@ struct NuApp: App {
 
     @MainActor
     init() {
+        #if DEBUG
+        let arguments = ProcessInfo.processInfo.arguments
+        let dependencies = arguments.contains("--use-mock-api") ? AppDependencies.preview : AppDependencies.live
+        #else
         let dependencies = AppDependencies.live
+        #endif
         self.dependencies = dependencies
 
         #if DEBUG

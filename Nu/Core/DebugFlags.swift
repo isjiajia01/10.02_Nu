@@ -1,7 +1,7 @@
 import Foundation
 
 #if DEBUG
-enum DebugFlags {
+nonisolated enum DebugFlags {
     /// 是否打印 Rejseplanen 发车实时字段诊断日志。
     /// 开启方式（任一）：
     /// 1) Xcode Scheme -> Run -> Arguments -> Environment:
@@ -40,6 +40,18 @@ enum DebugFlags {
             return true
         }
         return UserDefaults.standard.bool(forKey: "nu_debug_tracking_perf")
+    }
+
+    /// 是否输出站点/分组 mode 诊断日志。
+    /// 地图页会批量构造很多站点，默认关闭避免日志风暴拖慢 UI。
+    static var modeDebugLoggingEnabled: Bool {
+        let env = ProcessInfo.processInfo.environment["NU_DEBUG_MODE_LOGS"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        if env == "1" || env == "true" || env == "yes" {
+            return true
+        }
+        return UserDefaults.standard.bool(forKey: "nu_debug_mode_logs")
     }
 }
 #endif

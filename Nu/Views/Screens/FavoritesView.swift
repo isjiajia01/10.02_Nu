@@ -133,16 +133,27 @@ private struct FavoriteSwipeRow: View {
                             }
                             onDelete()
                         } label: {
-                            VStack(spacing: 4) {
-                                Image(systemName: station.iconName)
-                                    .font(.system(size: 16, weight: .semibold))
-                                Image(systemName: "minus.circle.fill")
-                                    .font(.system(size: 12, weight: .bold))
+                            ZStack {
+                                Label(
+                                    L10n.tr("favorites.remove.accessibility", station.typeLabel),
+                                    systemImage: "minus.circle.fill"
+                                )
+                                .labelStyle(.iconOnly)
+                                .font(.system(size: 16, weight: .bold))
+
+                                VStack(spacing: 4) {
+                                    Image(systemName: station.iconName)
+                                        .font(.system(size: 16, weight: .semibold))
+                                        .accessibilityHidden(true)
+                                    Image(systemName: "minus.circle.fill")
+                                        .font(.system(size: 12, weight: .bold))
+                                        .accessibilityHidden(true)
+                                }
                             }
                             .foregroundStyle(actionColor)
                             .frame(width: maxReveal, height: 58)
                         }
-                        .accessibilityLabel(L10n.tr("favorites.remove.accessibility", station.typeLabel))
+                        .buttonStyle(.plain)
                     }
                     .frame(width: maxReveal)
                     .padding(.trailing, 4)

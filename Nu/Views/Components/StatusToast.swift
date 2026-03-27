@@ -55,13 +55,13 @@ struct StatusToast: View {
             Button {
                 onDismiss()
             } label: {
-                Image(systemName: "xmark.circle.fill")
+                Label(L10n.tr("toast.dismiss"), systemImage: "xmark.circle.fill")
+                    .labelStyle(.iconOnly)
                     .font(.body)
                     .foregroundStyle(.secondary)
                     .frame(minWidth: 44, minHeight: 44)
             }
             .buttonStyle(.plain)
-            .accessibilityLabel(L10n.tr("toast.dismiss"))
             .accessibilityHint(L10n.tr("toast.dismiss.hint"))
         }
         .padding(.horizontal, 12)

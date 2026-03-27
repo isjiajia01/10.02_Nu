@@ -98,9 +98,9 @@ struct JourneyDetailView: View {
                 Button {
                     showTrackingMap = true
                 } label: {
-                    Label("Track", systemImage: "location.viewfinder")
+                    Label(L10n.tr("journeyDetail.trackVehicle"), systemImage: "location.viewfinder")
+                        .labelStyle(.iconOnly)
                 }
-                .accessibilityLabel("Track vehicle")
             }
         }
         .task {
@@ -262,14 +262,12 @@ struct JourneyDetailView: View {
             Spacer()
 
             if !row.menuItems.isEmpty {
-                Menu {
+                Menu(L10n.tr("common.more"), systemImage: "ellipsis.circle") {
                     ForEach(row.menuItems, id: \.self) { item in
                         Text(item)
                     }
-                } label: {
-                    Image(systemName: "ellipsis.circle")
-                        .foregroundStyle(.secondary)
                 }
+                .foregroundStyle(.secondary)
                 .buttonStyle(.plain)
             }
         }

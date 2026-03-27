@@ -1,349 +1,281 @@
 import Foundation
-import Combine
 import CoreLocation
+import Combine
 import MapKit
+import SwiftUI
 
 @MainActor
 final class MapViewModel: ObservableObject {
+    enum DebugScenario: String, Equatable {
+        case live
+        case empty
+        case failure
+        case denied
+    }
+
     @Published private(set) var stationGroups: [StationGroupModel] = []
     @Published private(set) var isLoading = false
     @Published private(set) var errorMessage: String?
-    @Published private(set) var focusCoordinate: CLLocationCoordinate2D?
-    @Published private(set) var focusToken: Int = 0
-    @Published var selectedGroup: StationGroupModel?
-    @Published private(set) var showSearchAreaButton = false
-    @Published private(set) var authStatus: CLAuthorizationStatus
-    @Published private(set) var isLocating = true
+    @Published private(set) var userCoordinate: CLLocationCoordinate2D?
+    @Published private(set) var usingFallbackLocation = false
+    @Published var cameraPosition: MapCameraPosition
+    @Published private(set) var isLocationDenied = false
 
-    var isLocationDenied: Bool {
-        authStatus == .denied || authStatus == .restricted
-    }
-
-    private let locationManager: LocationManaging
     private let apiService: APIServiceProtocol
-
-    private let fallbackLongitude = 12.568337
-    private let fallbackLatitude = 55.676098
-
+    private let locationManager: LocationManaging
+    private var debugScenario: DebugScenario
+    private var cancellables = Set<AnyCancellable>()
     private var hasStarted = false
-    private var hasReceivedFirstFix = false
-    private var hasReceivedStableFix = false
-    private var hasShownFallbackToast = false
+    private var hasLoadedPreciseLocation = false
+    private var loadTask: Task<Void, Never>?
 
-    private var lastRefreshQuery: MapRefreshQuery?
-    private var pendingQuery: MapRefreshQuery?
-
-    private var debounceTask: Task<Void, Never>?
-    private var inFlightFetchTask: Task<Void, Never>?
-    private var stableRefreshTask: Task<Void, Never>?
-    private var fallbackToastTask: Task<Void, Never>?
+    private let fallbackCoordinate = CLLocationCoordinate2D(
+        latitude: 55.676098,
+        longitude: 12.568337
+    )
 
     init(
         apiService: APIServiceProtocol = RejseplanenAPIService(),
-        locationManager: LocationManaging
+        locationManager: LocationManaging,
+        debugScenario: DebugScenario = .live
     ) {
         self.apiService = apiService
         self.locationManager = locationManager
-        self.authStatus = locationManager.authorizationStatus
+        self.debugScenario = debugScenario
+        self.cameraPosition = .region(
+            MKCoordinateRegion(
+                center: fallbackCoordinate,
+                span: MKCoordinateSpan(latitudeDelta: 0.04, longitudeDelta: 0.04)
+            )
+        )
     }
 
     deinit {
-        debounceTask?.cancel()
-        inFlightFetchTask?.cancel()
-        stableRefreshTask?.cancel()
-        fallbackToastTask?.cancel()
+        loadTask?.cancel()
+        cancellables.removeAll()
     }
 
-    func start() async {
+    func start() {
         guard !hasStarted else { return }
         hasStarted = true
 
-        errorMessage = nil
-        isLocating = true
-        authStatus = locationManager.authorizationStatus
+        guard debugScenario == .live else {
+            applyDebugScenario(debugScenario)
+            return
+        }
 
+        observeLocation()
         locationManager.requestAuthorization()
         locationManager.startUpdatingLocation()
 
-        fallbackToastTask?.cancel()
-        fallbackToastTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 5_000_000_000)
-            guard let self, !Task.isCancelled else { return }
-            guard !self.hasReceivedFirstFix, !self.hasShownFallbackToast else { return }
-
-            if !self.isLocationDenied {
-                self.hasShownFallbackToast = true
-                self.errorMessage = L10n.tr("map.locationFallback")
-            }
-
-            self.isLocating = false
-            await self.loadStations(
-                coordX: self.fallbackLongitude,
-                coordY: self.fallbackLatitude,
-                isFallback: true
-            )
-        }
-    }
-
-    func stop() {
-        debounceTask?.cancel()
-        inFlightFetchTask?.cancel()
-        stableRefreshTask?.cancel()
-        fallbackToastTask?.cancel()
-    }
-
-    func clearError() {
-        errorMessage = nil
-    }
-
-    func handleAuthorizationUpdate(_ auth: CLAuthorizationStatus) {
-        authStatus = auth
-    }
-
-    func handleLocationUpdate(_ location: CLLocation?) {
-        guard let location else { return }
-
-        if !hasReceivedFirstFix, isFirstFix(location) {
-            hasReceivedFirstFix = true
-            isLocating = false
-            fallbackToastTask?.cancel()
-            errorMessage = nil
-
-            focusCoordinate = location.coordinate
-            focusToken += 1
-
-            Task { [weak self] in
-                await self?.loadStationsFromLocation(location)
-            }
-
-            stableRefreshTask?.cancel()
-            stableRefreshTask = Task { [weak self] in
-                try? await Task.sleep(nanoseconds: 2_000_000_000)
-                guard let self, !Task.isCancelled else { return }
-                guard !self.hasReceivedStableFix else { return }
-            }
+        if let currentLocation = locationManager.currentLocation {
+            enqueueLoad(around: currentLocation.coordinate, usesFallback: false)
+            return
         }
 
-        if !hasReceivedStableFix, isStableFix(location) {
-            hasReceivedStableFix = true
-            stableRefreshTask?.cancel()
-            fallbackToastTask?.cancel()
-            errorMessage = nil
-
-            Task { [weak self] in
-                await self?.loadStationsFromLocation(location)
-            }
-        }
-    }
-
-    func handleViewportChange(region: MKCoordinateRegion, userGesture: Bool) {
-        guard userGesture else { return }
-
-        let nextQuery = MapRefreshQuery.from(center: region.center, span: region.span)
-        guard shouldRefresh(from: lastRefreshQuery, to: nextQuery) else { return }
-
-        pendingQuery = nextQuery
-        showSearchAreaButton = true
-        scheduleAutoRefresh(with: nextQuery)
-    }
-
-    func triggerManualSearch() {
-        guard let query = pendingQuery else { return }
-        debounceTask?.cancel()
-
-        Task { [weak self] in
-            await self?.runViewportRefresh(query)
-        }
-    }
-
-    func selectGroup(_ group: StationGroupModel) {
-        selectedGroup = group
-    }
-
-    private func scheduleAutoRefresh(with query: MapRefreshQuery) {
-        debounceTask?.cancel()
-        debounceTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 650_000_000)
-            guard let self, !Task.isCancelled else { return }
-            await self.runViewportRefresh(query)
-        }
-    }
-
-    private func runViewportRefresh(_ query: MapRefreshQuery) async {
-        inFlightFetchTask?.cancel()
-        isLoading = true
-        errorMessage = nil
-        showSearchAreaButton = false
-
-        inFlightFetchTask = Task { [weak self] in
+        loadTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
             guard let self else { return }
-
-            do {
-                try Task.checkCancellation()
-
-                let fetched = try await self.apiService.fetchNearbyStops(
-                    coordX: query.center.longitude,
-                    coordY: query.center.latitude,
-                    radiusMeters: query.radiusMeters,
-                    maxNo: query.maxNo
-                )
-                guard !Task.isCancelled else { return }
-
-                self.stationGroups = StationGrouping.buildGroups(fetched)
-                self.lastRefreshQuery = query
-                self.pendingQuery = nil
-                self.isLoading = false
-            } catch is CancellationError {
-                self.isLoading = false
-            } catch {
-                self.errorMessage = AppErrorPresenter.message(for: error, context: .map)
-                self.isLoading = false
-            }
+            guard self.stationGroups.isEmpty else { return }
+            await self.loadStations(around: self.fallbackCoordinate, usesFallback: true)
         }
     }
 
-    private func loadStationsFromLocation(_ location: CLLocation) async {
-        if isLikelyInDenmark(location) {
-            await loadStations(
-                coordX: location.coordinate.longitude,
-                coordY: location.coordinate.latitude,
-                isFallback: false
-            )
+    func refresh() async {
+        guard debugScenario == .live else {
+            applyDebugScenario(debugScenario)
+            return
+        }
+
+        if let currentLocation = locationManager.currentLocation {
+            await loadStations(around: currentLocation.coordinate, usesFallback: false)
         } else {
-            await loadStations(
-                coordX: fallbackLongitude,
-                coordY: fallbackLatitude,
-                isFallback: true
-            )
-            if !hasShownFallbackToast {
-                hasShownFallbackToast = true
-                errorMessage = L10n.tr("map.locationFallback")
+            locationManager.requestAuthorization()
+            locationManager.startUpdatingLocation()
+            await loadStations(around: fallbackCoordinate, usesFallback: true)
+        }
+    }
+
+    func setDebugScenario(_ scenario: DebugScenario) {
+        debugScenario = scenario
+        hasLoadedPreciseLocation = false
+
+        if hasStarted {
+            if scenario == .live {
+                stationGroups = []
+                errorMessage = nil
+                usingFallbackLocation = false
+                isLocationDenied = false
+                startLiveFlow()
+            } else {
+                applyDebugScenario(scenario)
             }
         }
     }
 
-    private func loadStations(coordX: Double, coordY: Double, isFallback: Bool) async {
+    private func startLiveFlow() {
+        observeLocation()
+        locationManager.requestAuthorization()
+        locationManager.startUpdatingLocation()
+        enqueueLoad(around: fallbackCoordinate, usesFallback: true)
+    }
+
+    private func observeLocation() {
+        cancellables.removeAll()
+
+        locationManager.currentLocationPublisher
+            .compactMap { $0 }
+            .receive(on: RunLoop.main)
+            .sink { [weak self] location in
+                guard let self else { return }
+                guard !self.hasLoadedPreciseLocation else { return }
+                self.enqueueLoad(around: location.coordinate, usesFallback: false)
+            }
+            .store(in: &cancellables)
+
+        locationManager.authorizationStatusPublisher
+            .receive(on: RunLoop.main)
+            .sink { [weak self] status in
+                guard let self else { return }
+                self.isLocationDenied = status == .denied || status == .restricted
+                guard status == .denied || status == .restricted else { return }
+                self.enqueueLoad(around: self.fallbackCoordinate, usesFallback: true)
+            }
+            .store(in: &cancellables)
+    }
+
+    private func enqueueLoad(
+        around coordinate: CLLocationCoordinate2D,
+        usesFallback: Bool
+    ) {
+        loadTask?.cancel()
+        loadTask = Task { [weak self] in
+            await self?.loadStations(around: coordinate, usesFallback: usesFallback)
+        }
+    }
+
+    private func loadStations(
+        around coordinate: CLLocationCoordinate2D,
+        usesFallback: Bool
+    ) async {
         isLoading = true
+        errorMessage = nil
+        isLocationDenied = false
+        usingFallbackLocation = usesFallback
+        userCoordinate = usesFallback ? nil : coordinate
 
         do {
-            let initialQuery = MapRefreshQuery.from(
-                center: CLLocationCoordinate2D(latitude: coordY, longitude: coordX),
-                span: MKCoordinateSpan(latitudeDelta: 0.03, longitudeDelta: 0.03)
+            let stations = try await apiService.fetchNearbyStops(
+                coordX: coordinate.longitude,
+                coordY: coordinate.latitude,
+                radiusMeters: 1500,
+                maxNo: 20
             )
 
-            let fetched = try await apiService.fetchNearbyStops(
-                coordX: coordX,
-                coordY: coordY,
-                radiusMeters: initialQuery.radiusMeters,
-                maxNo: initialQuery.maxNo
-            )
+            let groups = StationGrouping.buildGroups(stations)
+            stationGroups = groups
+            cameraPosition = .region(makeRegion(center: coordinate, groups: groups))
+            persistDebugCaptureIfNeeded(groups: groups)
 
-            stationGroups = StationGrouping.buildGroups(fetched)
-            lastRefreshQuery = initialQuery
-            pendingQuery = nil
-            showSearchAreaButton = false
-
-            if !isFallback {
-                errorMessage = nil
-            }
-
-            if let first = stationGroups.first?.bestEntrance() {
-                focusCoordinate = CLLocationCoordinate2D(
-                    latitude: first.latitude,
-                    longitude: first.longitude
-                )
-                focusToken += 1
+            if usesFallback {
+                errorMessage = L10n.tr("map.locationFallback")
+            } else {
+                hasLoadedPreciseLocation = true
+                locationManager.stopUpdatingLocation()
             }
         } catch {
+            stationGroups = []
+            cameraPosition = .region(makeRegion(center: coordinate, groups: []))
             errorMessage = AppErrorPresenter.message(for: error, context: .map)
-            if stationGroups.isEmpty {
-                stationGroups = []
-            }
         }
 
         isLoading = false
     }
 
-    private func shouldRefresh(from previous: MapRefreshQuery?, to next: MapRefreshQuery) -> Bool {
-        guard let previous else { return true }
-        return previous.centerDistanceMeters(to: next) > 200
-            || previous.spanDeltaRatio(to: next) > 0.30
+    private func applyDebugScenario(_ scenario: DebugScenario) {
+        loadTask?.cancel()
+        cancellables.removeAll()
+        locationManager.stopUpdatingLocation()
+
+        isLoading = false
+        userCoordinate = nil
+        usingFallbackLocation = false
+        isLocationDenied = false
+        cameraPosition = .region(
+            MKCoordinateRegion(
+                center: fallbackCoordinate,
+                span: MKCoordinateSpan(latitudeDelta: 0.03, longitudeDelta: 0.03)
+            )
+        )
+
+        switch scenario {
+        case .live:
+            break
+        case .empty:
+            stationGroups = []
+            errorMessage = nil
+        case .failure:
+            stationGroups = []
+            errorMessage = L10n.tr("map.loadFailed.description")
+        case .denied:
+            stationGroups = []
+            errorMessage = nil
+            isLocationDenied = true
+        }
     }
 
-    private func isFirstFix(_ location: CLLocation) -> Bool {
-        let coord = location.coordinate
-        guard CLLocationCoordinate2DIsValid(coord) else { return false }
-        guard !(coord.latitude == 0 && coord.longitude == 0) else { return false }
-        guard location.horizontalAccuracy > 0, location.horizontalAccuracy <= 5000 else { return false }
-        guard abs(location.timestamp.timeIntervalSinceNow) < 60 else { return false }
-        return true
+    private func persistDebugCaptureIfNeeded(groups: [StationGroupModel]) {
+        #if DEBUG
+        guard ProcessInfo.processInfo.arguments.contains("--map-debug-capture-live-stations") else { return }
+
+        let stationIDs = groups.flatMap(\.stations).map(\.id)
+        let stationNames = groups.map(\.baseName)
+        UserDefaults.standard.set(stationIDs, forKey: "nu.debug.map.stationIDs")
+        UserDefaults.standard.set(stationNames, forKey: "nu.debug.map.stationNames")
+        UserDefaults.standard.set(stationIDs.first, forKey: "nu.debug.map.firstStationID")
+        UserDefaults.standard.set(stationNames.first, forKey: "nu.debug.map.firstStationName")
+        #endif
     }
 
-    private func isStableFix(_ location: CLLocation) -> Bool {
-        let coord = location.coordinate
-        guard CLLocationCoordinate2DIsValid(coord) else { return false }
-        guard !(coord.latitude == 0 && coord.longitude == 0) else { return false }
-        guard location.horizontalAccuracy > 0, location.horizontalAccuracy <= 1000 else { return false }
-        guard abs(location.timestamp.timeIntervalSinceNow) < 30 else { return false }
-        return true
-    }
+    private func makeRegion(
+        center: CLLocationCoordinate2D,
+        groups: [StationGroupModel]
+    ) -> MKCoordinateRegion {
+        let coordinates = groups.compactMap(\.mapCoordinate)
+        guard !coordinates.isEmpty else {
+            return MKCoordinateRegion(
+                center: center,
+                span: MKCoordinateSpan(latitudeDelta: 0.03, longitudeDelta: 0.03)
+            )
+        }
 
-    private func isLikelyInDenmark(_ location: CLLocation) -> Bool {
-        let lat = location.coordinate.latitude
-        let lon = location.coordinate.longitude
-        return (54.0...58.0).contains(lat) && (7.0...16.5).contains(lon)
+        let latitudes = coordinates.map(\.latitude)
+        let longitudes = coordinates.map(\.longitude)
+
+        let minLat = min(latitudes.min() ?? center.latitude, center.latitude)
+        let maxLat = max(latitudes.max() ?? center.latitude, center.latitude)
+        let minLon = min(longitudes.min() ?? center.longitude, center.longitude)
+        let maxLon = max(longitudes.max() ?? center.longitude, center.longitude)
+
+        return MKCoordinateRegion(
+            center: CLLocationCoordinate2D(
+                latitude: (minLat + maxLat) / 2,
+                longitude: (minLon + maxLon) / 2
+            ),
+            span: MKCoordinateSpan(
+                latitudeDelta: max(0.01, (maxLat - minLat) * 1.6),
+                longitudeDelta: max(0.01, (maxLon - minLon) * 1.6)
+            )
+        )
     }
 }
 
-struct MapRefreshQuery: Equatable {
-    let center: CLLocationCoordinate2D
-    let latitudeDelta: Double
-    let longitudeDelta: Double
-    let radiusMeters: Int
-    let maxNo: Int
-
-    static func from(center: CLLocationCoordinate2D, span: MKCoordinateSpan) -> MapRefreshQuery {
-        let centerLocation = CLLocation(latitude: center.latitude, longitude: center.longitude)
-        let latEdge = CLLocation(
-            latitude: center.latitude + span.latitudeDelta / 2,
-            longitude: center.longitude
+extension StationGroupModel {
+    var mapCoordinate: CLLocationCoordinate2D? {
+        let entrance = bestEntrance()
+        return CLLocationCoordinate2D(
+            latitude: entrance.latitude,
+            longitude: entrance.longitude
         )
-        let lonEdge = CLLocation(
-            latitude: center.latitude,
-            longitude: center.longitude + span.longitudeDelta / 2
-        )
-
-        let radius = Int(max(centerLocation.distance(from: latEdge), centerLocation.distance(from: lonEdge)))
-        let clampedRadius = min(1500, max(300, radius))
-        let maxNo = min(80, max(30, Int(30 + (Double(clampedRadius - 300) / 1200.0) * 50.0)))
-
-        return MapRefreshQuery(
-            center: center,
-            latitudeDelta: span.latitudeDelta,
-            longitudeDelta: span.longitudeDelta,
-            radiusMeters: clampedRadius,
-            maxNo: maxNo
-        )
-    }
-
-    func centerDistanceMeters(to other: MapRefreshQuery) -> Double {
-        let a = CLLocation(latitude: center.latitude, longitude: center.longitude)
-        let b = CLLocation(latitude: other.center.latitude, longitude: other.center.longitude)
-        return a.distance(from: b)
-    }
-
-    func spanDeltaRatio(to other: MapRefreshQuery) -> Double {
-        let latRatio = abs(other.latitudeDelta - latitudeDelta) / max(latitudeDelta, 0.0001)
-        let lonRatio = abs(other.longitudeDelta - longitudeDelta) / max(longitudeDelta, 0.0001)
-        return max(latRatio, lonRatio)
-    }
-
-    static func == (lhs: MapRefreshQuery, rhs: MapRefreshQuery) -> Bool {
-        lhs.center.latitude == rhs.center.latitude
-            && lhs.center.longitude == rhs.center.longitude
-            && lhs.latitudeDelta == rhs.latitudeDelta
-            && lhs.longitudeDelta == rhs.longitudeDelta
-            && lhs.radiusMeters == rhs.radiusMeters
-            && lhs.maxNo == rhs.maxNo
     }
 }

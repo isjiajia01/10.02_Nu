@@ -314,16 +314,27 @@ final class DepartureWalkingETAController: ObservableObject {
 
     private func isFreshLocation(_ location: CLLocation) -> Bool {
         let age = Date().timeIntervalSince(location.timestamp)
-        return location.horizontalAccuracy > 0
-            && location.horizontalAccuracy <= freshLocationAccuracyThreshold
+        let accuracy = normalizedAccuracy(for: location)
+        return accuracy <= freshLocationAccuracyThreshold
             && age <= freshLocationMaxAge
     }
 
     private func isUsableLocation(_ location: CLLocation) -> Bool {
         let age = Date().timeIntervalSince(location.timestamp)
-        return location.horizontalAccuracy > 0
-            && location.horizontalAccuracy <= usableLocationAccuracyThreshold
+        let accuracy = normalizedAccuracy(for: location)
+        return accuracy <= usableLocationAccuracyThreshold
             && age <= usableLocationMaxAge
+    }
+
+    private func normalizedAccuracy(for location: CLLocation) -> CLLocationAccuracy {
+        let accuracy = location.horizontalAccuracy
+        if accuracy > 0 {
+            return accuracy
+        }
+
+        // Synthetic test locations and some cached platform locations may not
+        // report a positive accuracy. Treat them as usable but conservative.
+        return freshLocationAccuracyThreshold
     }
 
     private func resolveWalkingStopPoint(
@@ -402,7 +413,8 @@ final class DepartureWalkingETAController: ObservableObject {
 
     private func logWalkETA(_ message: String) {
         #if DEBUG
-        fputs("[WalkETA] \(message) stationId=\(stationId)\n", stderr)
+        guard ProcessInfo.processInfo.environment["XCTestSessionIdentifier"] == nil else { return }
+        AppLogger.debug("[WalkETA] \(message) stationId=\(stationId)")
         #endif
     }
 }

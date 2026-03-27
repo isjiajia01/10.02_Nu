@@ -44,6 +44,7 @@ struct GlassFavoriteStationCard: View {
             Image(systemName: "chevron.right")
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(.gray.opacity(0.55))
+                .accessibilityHidden(true)
         }
         .padding(16)
         .background(
@@ -57,7 +58,7 @@ struct GlassFavoriteStationCard: View {
         )
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(L10n.tr("favorites.card.accessibility.label", station.name, station.typeLabel))
-        .accessibilityValue(station.typeLabel)
+        .accessibilityValue(L10n.tr("favorites.card.accessibility.value", station.id))
         .accessibilityHint(L10n.tr("favorites.card.accessibility.hint"))
     }
 

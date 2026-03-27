@@ -1,7 +1,7 @@
 import Foundation
 
-struct JourneyProgressEstimation: Equatable {
-    enum Status: Equatable {
+nonisolated struct JourneyProgressEstimation: Equatable {
+    nonisolated enum Status: Equatable {
         case between(from: String, to: String)
         case at(name: String)
         case nearDestination
@@ -16,7 +16,7 @@ struct JourneyProgressEstimation: Equatable {
     let status: Status
 }
 
-enum JourneyProgressEstimator {
+nonisolated enum JourneyProgressEstimator {
     static func infer(
         stops: [JourneyStop],
         fallbackCurrentStopName: String,
@@ -110,7 +110,7 @@ enum JourneyProgressEstimator {
     }
 }
 
-private struct JourneyTimelinePoint {
+nonisolated private struct JourneyTimelinePoint {
     let index: Int
     let stop: JourneyStop
     let arrivalDate: Date?

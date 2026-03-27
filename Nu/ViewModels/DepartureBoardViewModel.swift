@@ -272,7 +272,6 @@ final class DepartureBoardViewModel: ObservableObject {
 
     private func bindWalkingController() {
         walkingStateCancellable = walkingETAController.$snapshot
-            .receive(on: RunLoop.main)
             .sink { [weak self] snapshot in
                 guard let self else { return }
                 self.applyWalkingSnapshot(snapshot)

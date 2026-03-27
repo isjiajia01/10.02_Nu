@@ -5,6 +5,10 @@ import MapKit
 
 @MainActor
 final class VehicleTrackingViewModel: ObservableObject {
+    struct TrackingDebugInfo: Equatable {
+        static let empty = TrackingDebugInfo()
+    }
+
     enum MotionState: Equatable {
         case moving
         case stopped
@@ -34,8 +38,10 @@ final class VehicleTrackingViewModel: ObservableObject {
     @Published private(set) var trackedVehicle: JourneyVehicle?
     @Published private(set) var nearbyLineVehicles: [JourneyVehicle] = []
     @Published private(set) var routeCoordinates: [CLLocationCoordinate2D] = []
+    @Published private(set) var routeStops: [JourneyStop] = []
     @Published private(set) var motionState: MotionState = .stale
     @Published private(set) var lastUpdateDate: Date?
+    @Published private(set) var mapCenterCoordinate: CLLocationCoordinate2D?
     /// P0-2: incremented only when valid (generation-checked) data is published.
     @Published private(set) var displayGeneration: Int = 0
     @Published var visibleRegion: MKCoordinateRegion
@@ -50,6 +56,8 @@ final class VehicleTrackingViewModel: ObservableObject {
     private let apiService: APIServiceProtocol
     private let departure: Departure
     private let operationDate: String?
+    private let originStopName: String
+    private let selectedStopCoordinate: CLLocationCoordinate2D?
     private var identity: TrackingIdentity
     private var pollingTask: Task<Void, Never>?
     private var identityTask: Task<Void, Never>?
@@ -75,6 +83,7 @@ final class VehicleTrackingViewModel: ObservableObject {
     private let pollingInterval: TimeInterval = 7
     private let minimumFetchInterval: TimeInterval = 2.0
     private var lastFetchAt: Date = .distantPast
+    private var hasCompletedBootstrapFetch = false
 
     // MARK: P0-5 perf counters
     #if DEBUG
@@ -95,6 +104,13 @@ final class VehicleTrackingViewModel: ObservableObject {
         self.departure = departure
         self.operationDate = operationDate
         self.apiService = apiService
+        self.originStopName = departure.stop
+        self.selectedStopCoordinate = departure.passListStops.first(where: {
+            VehicleTrackingMatcher.normalizedStopName($0.name) == VehicleTrackingMatcher.normalizedStopName(departure.stop)
+        }).flatMap { stop in
+            guard let lat = stop.lat, let lon = stop.lon else { return nil }
+            return CLLocationCoordinate2D(latitude: lat, longitude: lon)
+        }
         self.visibleRegion = initialRegion
         self.identity = TrackingIdentity(
             journeyRef: departure.journeyRef,
@@ -126,6 +142,7 @@ final class VehicleTrackingViewModel: ObservableObject {
         identityTask = Task { [weak self] in
             guard let self else { return }
             await self.bootstrapIdentity()
+            self.requestFetch(reason: "identity-resolved")
         }
         pollingTask = Task { [weak self] in
             guard let self else { return }
@@ -220,6 +237,7 @@ final class VehicleTrackingViewModel: ObservableObject {
                 if sanitized.count >= 2 {
                     self.routeCoordinates = sanitized
                 }
+                self.routeStops = detail.stops
             } catch {
                 // Route highlight is best-effort and should not block tracking.
             }
@@ -320,14 +338,16 @@ final class VehicleTrackingViewModel: ObservableObject {
         if state == .loading {
             statusText = "Searching vehicles in map area…"
         }
-        let boxes = makeFetchBoxes()
+        let isBootstrap = !hasCompletedBootstrapFetch
+        let routeSearchRequired = selectedVehicleLikelyNeedsRouteSearch
+        let boxes = makeFetchBoxes(isBootstrap: isBootstrap, routeSearchRequired: routeSearchRequired)
         guard !boxes.isEmpty else { return }
 
         do {
             var allVehicles: [JourneyVehicle] = []
             for box in boxes {
                 let filters = makeFilters()
-                let items = try await withTimeout(seconds: 6) {
+                let items = try await withTimeout(seconds: hasCompletedBootstrapFetch ? 6 : 5) {
                     try await self.apiService.fetchJourneyPositions(
                         bbox: box,
                         filters: filters,
@@ -349,7 +369,7 @@ final class VehicleTrackingViewModel: ObservableObject {
                 }
                 missedRounds += 1
                 if missedRounds >= 2 {
-                    localRadiusMeters = min(localRadiusMeters * 1.5, mapVisibleRadiusMeters())
+                    localRadiusMeters = min(localRadiusMeters * 1.5, visibleRadiusMeters())
                     forceGlobalReacquireRounds = min(2, forceGlobalReacquireRounds + 1)
                 }
                 state = .empty
@@ -370,20 +390,26 @@ final class VehicleTrackingViewModel: ObservableObject {
 
             let identitySnapshot = identity
             let predicted = predictedMainCoordinate(at: Date())
+            let routeStopsSnapshot = routeStops
             scoringTask?.cancel()
             let currentTracked = trackedVehicle
             scoringTask = Task.detached(priority: .userInitiated) {
-                Self.selectBestVehicleV3(
+                VehicleTrackingMatcher.selectBestVehicle(
                     from: deduped,
-                    identity: identitySnapshot,
-                    currentMain: currentTracked,
-                    predictedCoordinate: predicted
+                    context: .init(
+                        identity: identitySnapshot,
+                        currentMain: currentTracked,
+                        predictedCoordinate: predicted,
+                        originStopName: self.originStopName,
+                        routeStops: routeStopsSnapshot,
+                        selectedStopCoordinate: self.selectedStopCoordinate
+                    )
                 )
             }
-            let matched = await scoringTask?.value ?? deduped[0]
+            let selection = await scoringTask?.value
+            let matched = selection ?? deduped[0]
             // P0-2 checkpoint 2: generation check after scoring
             guard isGenerationCurrent(generation) else { return }
-
             let previousMatchedId = identity.lastMatchedVehicleId ?? trackedVehicle?.id
             if previousMatchedId == matched.id {
                 stableMatchStreak += 1
@@ -417,6 +443,7 @@ final class VehicleTrackingViewModel: ObservableObject {
             identity.lastMatchedVehicleId = matched.id
             identity.lastMatchAt = Date()
             lastUpdateDate = Date()
+            mapCenterCoordinate = matched.coordinate
             nearbyRenderRound += 1
             if nearbyRenderRound % 3 == 0 || nearbyLineVehicles.isEmpty {
                 nearbyLineVehicles = buildNearbyLineVehicles(from: deduped, primary: matched)
@@ -451,6 +478,10 @@ final class VehicleTrackingViewModel: ObservableObject {
             if forceGlobalReacquireRounds > 0 {
                 forceGlobalReacquireRounds -= 1
             }
+            hasCompletedBootstrapFetch = true
+            if !isInteracting {
+                visibleRegion = Self.regionAroundVehicle(matched.coordinate)
+            }
         } catch let api as APIError {
             switch api {
             case .unauthorized, .forbidden:
@@ -475,6 +506,13 @@ final class VehicleTrackingViewModel: ObservableObject {
         }
     }
 
+    private static func regionAroundVehicle(_ coordinate: CLLocationCoordinate2D) -> MKCoordinateRegion {
+        MKCoordinateRegion(
+            center: coordinate,
+            span: MKCoordinateSpan(latitudeDelta: 0.025, longitudeDelta: 0.025)
+        )
+    }
+
     // MARK: - Filters & scoring
 
     private func makeFilters() -> JourneyPosFilters {
@@ -488,104 +526,6 @@ final class VehicleTrackingViewModel: ObservableObject {
             filters.lines = Array(Set(values))
         }
         return filters
-    }
-
-    nonisolated private static func selectBestVehicleV3(
-        from vehicles: [JourneyVehicle],
-        identity: TrackingIdentity,
-        currentMain: JourneyVehicle?,
-        predictedCoordinate: CLLocationCoordinate2D?
-    ) -> JourneyVehicle? {
-        guard !vehicles.isEmpty else { return nil }
-        if let jid = identity.jid,
-           let exact = vehicles.first(where: { $0.jid == jid || $0.id == jid }) {
-            return exact
-        }
-
-        let line = normalizedText(identity.line)
-        let lineToken = normalizedLineTokenStatic(identity.line)
-        let direction = normalizedText(identity.direction)
-        let targetDate = identity.plannedOrRealtimeDeparture
-
-        var candidates = vehicles
-        if let lineToken {
-            let lineHits = vehicles.filter { normalizedLineTokenStatic($0.line) == lineToken }
-            if !lineHits.isEmpty {
-                candidates = lineHits
-            }
-        } else if !line.isEmpty {
-            let lineHits = vehicles.filter { normalizedText($0.line) == line }
-            if !lineHits.isEmpty {
-                candidates = lineHits
-            }
-        }
-        if !direction.isEmpty {
-            let directionHits = candidates.filter { normalizedText($0.direction).contains(direction) }
-            if !directionHits.isEmpty {
-                candidates = directionHits
-            }
-        }
-        if let anchor = identity.lastKnownCoordinate, candidates.count > 60 {
-            candidates = candidates.sorted { lhs, rhs in
-                let l = CLLocation(latitude: lhs.coordinate.latitude, longitude: lhs.coordinate.longitude)
-                    .distance(from: CLLocation(latitude: anchor.latitude, longitude: anchor.longitude))
-                let r = CLLocation(latitude: rhs.coordinate.latitude, longitude: rhs.coordinate.longitude)
-                    .distance(from: CLLocation(latitude: anchor.latitude, longitude: anchor.longitude))
-                return l < r
-            }
-            candidates = Array(candidates.prefix(60))
-        }
-
-        let scored: [(JourneyVehicle, Double)] = candidates.map { vehicle in
-            var score = 0.0
-            if let lineToken {
-                if normalizedLineTokenStatic(vehicle.line) == lineToken { score += 5.5 }
-            } else if normalizedText(vehicle.line) == line, !line.isEmpty {
-                score += 4
-            }
-            if normalizedText(vehicle.direction).contains(direction), !direction.isEmpty { score += 2 }
-            if let targetDate, let t = vehicle.lastUpdated {
-                score += max(0, 2 - abs(t.timeIntervalSince(targetDate)) / 60.0)
-            }
-            if let predictedCoordinate {
-                let predictedDistance = CLLocation(latitude: predictedCoordinate.latitude, longitude: predictedCoordinate.longitude)
-                    .distance(from: CLLocation(latitude: vehicle.coordinate.latitude, longitude: vehicle.coordinate.longitude))
-                score += max(0, 2 - predictedDistance / 500.0)
-            }
-            if let anchor = identity.lastKnownCoordinate {
-                let distance = CLLocation(latitude: anchor.latitude, longitude: anchor.longitude)
-                    .distance(from: CLLocation(latitude: vehicle.coordinate.latitude, longitude: vehicle.coordinate.longitude))
-                score += max(0, 3 - distance / 400.0)
-            }
-            if identity.lastMatchedVehicleId == vehicle.id {
-                score += 2.5
-            }
-            if currentMain?.id == vehicle.id {
-                score += 0.4
-            }
-            return (vehicle, score)
-        }
-
-        return scored.max(by: { $0.1 < $1.1 })?.0
-    }
-
-    nonisolated private static func normalizedText(_ text: String?) -> String {
-        (text ?? "")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased()
-    }
-
-    nonisolated private static func normalizedLineTokenStatic(_ text: String?) -> String? {
-        let raw = (text ?? "").lowercased()
-        guard !raw.isEmpty else { return nil }
-        let stripped = raw
-            .replacingOccurrences(of: "bus", with: "")
-            .replacingOccurrences(of: "metro", with: "")
-            .replacingOccurrences(of: "tog", with: "")
-            .replacingOccurrences(of: "line", with: "")
-            .replacingOccurrences(of: " ", with: "")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        return stripped.isEmpty ? nil : stripped
     }
 
     private func buildNearbyLineVehicles(from vehicles: [JourneyVehicle], primary: JourneyVehicle) -> [JourneyVehicle] {
@@ -609,37 +549,38 @@ final class VehicleTrackingViewModel: ObservableObject {
     }
 
     private func normalizedLineToken(_ text: String?) -> String? {
-        let raw = (text ?? "").lowercased()
-        guard !raw.isEmpty else { return nil }
-        let stripped = raw
-            .replacingOccurrences(of: "bus", with: "")
-            .replacingOccurrences(of: "metro", with: "")
-            .replacingOccurrences(of: "tog", with: "")
-            .replacingOccurrences(of: " ", with: "")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        return stripped.isEmpty ? nil : stripped
+        VehicleTrackingMatcher.normalizedLineToken(text)
     }
 
     // MARK: - BBox strategy
 
-    private func makeFetchBoxes() -> [JourneyPosBBox] {
-        if forceGlobalReacquireRounds > 0 {
-            return JourneyPosBBox.from(
-                center: visibleRegion.center,
-                spanLatitude: visibleRegion.span.latitudeDelta,
-                spanLongitude: visibleRegion.span.longitudeDelta
+    private func makeFetchBoxes(isBootstrap: Bool, routeSearchRequired: Bool) -> [JourneyPosBBox] {
+        VehicleTrackingMatcher.makeFetchBoxes(
+            for: .init(
+                isBootstrap: isBootstrap,
+                forceGlobalReacquireRounds: forceGlobalReacquireRounds,
+                trackedVehicle: trackedVehicle,
+                identity: identity,
+                routeCoordinates: routeCoordinates,
+                visibleRegion: visibleRegion,
+                localRadiusMeters: localRadiusMeters,
+                originStopName: originStopName
             )
-        }
-
-        let center = identity.lastKnownCoordinate ?? trackedVehicle?.coordinate ?? visibleRegion.center
-        let radius = max(400, min(localRadiusMeters, mapVisibleRadiusMeters()))
-        let latDelta = (radius * 2.0) / 111_000.0
-        let lonScale = max(0.2, cos(center.latitude * .pi / 180))
-        let lonDelta = (radius * 2.0) / (111_000.0 * lonScale)
-        return JourneyPosBBox.from(center: center, spanLatitude: latDelta, spanLongitude: lonDelta)
+        )
     }
 
-    private func mapVisibleRadiusMeters() -> Double {
+    private var selectedVehicleLikelyNeedsRouteSearch: Bool {
+        let normalizedStop = VehicleTrackingMatcher.normalizedStopName(originStopName)
+        guard !normalizedStop.isEmpty else { return false }
+        if let trackedVehicle,
+           let stopName = trackedVehicle.stopName,
+           VehicleTrackingMatcher.normalizedStopName(stopName) == normalizedStop {
+            return false
+        }
+        return true
+    }
+
+    private func visibleRadiusMeters() -> Double {
         let center = CLLocation(latitude: visibleRegion.center.latitude, longitude: visibleRegion.center.longitude)
         let edge = CLLocation(
             latitude: visibleRegion.center.latitude + visibleRegion.span.latitudeDelta / 2.0,

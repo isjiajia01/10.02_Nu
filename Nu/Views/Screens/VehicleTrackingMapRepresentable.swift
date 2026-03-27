@@ -6,6 +6,9 @@ struct VehicleTrackingMapRepresentable: UIViewRepresentable {
     let vehicle: JourneyVehicle?
     let nearbyVehicles: [JourneyVehicle]
     let routeCoordinates: [CLLocationCoordinate2D]
+    let centerOnVehicleCoordinate: CLLocationCoordinate2D?
+    let selectedVehicleID: String?
+    let highlightedVehicleCoordinate: CLLocationCoordinate2D?
     /// P0-2: generation counter from ViewModel; Coordinator skips stale updates.
     let displayGeneration: Int
     /// P0-4: when true, nearby candidate annotations are frozen.
@@ -13,6 +16,7 @@ struct VehicleTrackingMapRepresentable: UIViewRepresentable {
     @Binding var region: MKCoordinateRegion
     let onInteractionStart: () -> Void
     let onInteractionEnd: () -> Void
+    let onVehicleSelection: (JourneyVehicle) -> Void
 
     func makeCoordinator() -> Coordinator {
         Coordinator(parent: self)
@@ -30,7 +34,13 @@ struct VehicleTrackingMapRepresentable: UIViewRepresentable {
     func updateUIView(_ mapView: MKMapView, context: Context) {
         context.coordinator.parent = self
         context.coordinator.syncRoute(on: mapView, coordinates: routeCoordinates)
-        context.coordinator.syncVehicle(on: mapView, vehicle: vehicle, generation: displayGeneration)
+        context.coordinator.syncMapCamera(on: mapView, centerCoordinate: centerOnVehicleCoordinate)
+        context.coordinator.syncVehicle(
+            on: mapView,
+            vehicle: vehicle,
+            highlightedCoordinate: highlightedVehicleCoordinate ?? vehicle?.coordinate,
+            generation: displayGeneration
+        )
     }
 
     // MARK: - Coordinator
@@ -40,12 +50,14 @@ struct VehicleTrackingMapRepresentable: UIViewRepresentable {
         private var currentAnnotation: TrackingVehicleAnnotation?
         private var nearbyAnnotationsByID: [String: TrackingVehicleAnnotation] = [:]
         private var baseRouteOverlay: MKPolyline?
+        private var passedRouteOverlay: MKPolyline?
         private var remainingRouteOverlay: MKPolyline?
         private var routeSignature: String?
         private var routeCoords: [CLLocationCoordinate2D] = []
         private var lastSplitIndex: Int?
         private var lastProjection: CLLocationCoordinate2D?
         private var routeOverlayKinds: [ObjectIdentifier: RouteSegmentKind] = [:]
+        private var lastAutoCenteredCoordinate: CLLocationCoordinate2D?
         /// P0-2: tracks the last generation applied to avoid stale updates.
         private var lastAppliedVehicleGeneration: Int = 0
 
@@ -90,7 +102,30 @@ struct VehicleTrackingMapRepresentable: UIViewRepresentable {
 
         // MARK: - Vehicle sync (P0-2 generation check, P0-4 interaction freeze)
 
-        func syncVehicle(on mapView: MKMapView, vehicle: JourneyVehicle?, generation: Int) {
+        func syncMapCamera(on mapView: MKMapView, centerCoordinate: CLLocationCoordinate2D?) {
+            guard let centerCoordinate else { return }
+            guard !parent.isInteracting else { return }
+            if let lastAutoCenteredCoordinate {
+                let distance = CLLocation(latitude: lastAutoCenteredCoordinate.latitude, longitude: lastAutoCenteredCoordinate.longitude)
+                    .distance(from: CLLocation(latitude: centerCoordinate.latitude, longitude: centerCoordinate.longitude))
+                if distance < 20 {
+                    return
+                }
+            }
+            lastAutoCenteredCoordinate = centerCoordinate
+            let targetRegion = MKCoordinateRegion(
+                center: centerCoordinate,
+                span: parent.region.span
+            )
+            mapView.setRegion(targetRegion, animated: true)
+        }
+
+        func syncVehicle(
+            on mapView: MKMapView,
+            vehicle: JourneyVehicle?,
+            highlightedCoordinate: CLLocationCoordinate2D?,
+            generation: Int
+        ) {
             // P0-2 checkpoint 3: skip stale generation data at MapKit boundary
             guard generation >= lastAppliedVehicleGeneration else {
                 #if DEBUG
@@ -122,7 +157,7 @@ struct VehicleTrackingMapRepresentable: UIViewRepresentable {
             }
 
             // Route progress – always update (driven by main vehicle position)
-            syncRouteProgress(on: mapView, vehicleCoordinate: vehicle.coordinate)
+            syncRouteProgress(on: mapView, vehicleCoordinate: highlightedCoordinate ?? vehicle.coordinate)
 
             // Main vehicle annotation – always update with smooth animation
             updateMainAnnotation(on: mapView, vehicle: vehicle)
@@ -146,7 +181,7 @@ struct VehicleTrackingMapRepresentable: UIViewRepresentable {
                     annotation.coordinate = destination
                 }
                 annotation.title = vehicle.line
-                annotation.subtitle = vehicle.direction
+                annotation.subtitle = [vehicle.stopName, vehicle.nextStopName].compactMap { $0 }.joined(separator: " → ")
                 #if DEBUG
                 annotationMoveCount += 1
                 #endif
@@ -193,7 +228,7 @@ struct VehicleTrackingMapRepresentable: UIViewRepresentable {
                         existing.coordinate = nearby.coordinate
                     }
                     existing.title = nearby.line
-                    existing.subtitle = nearby.direction
+                    existing.subtitle = [nearby.stopName, nearby.nextStopName].compactMap { $0 }.joined(separator: " → ")
                     #if DEBUG
                     annotationMoveCount += 1
                     #endif
@@ -254,15 +289,25 @@ struct VehicleTrackingMapRepresentable: UIViewRepresentable {
             view.annotation = annotation
             view.canShowCallout = true
             if let ann = annotation as? TrackingVehicleAnnotation, ann.style == .secondary {
-                view.markerTintColor = .systemGray
+                let isSelected = ann.vehicleId == parent.selectedVehicleID
+                view.markerTintColor = isSelected ? .systemOrange : .systemGray
                 view.glyphImage = UIImage(systemName: "circle.fill")
-                view.displayPriority = .defaultHigh
+                view.displayPriority = isSelected ? .required : .defaultHigh
             } else {
                 view.markerTintColor = .systemBlue
-                view.glyphImage = UIImage(systemName: "bus.fill")
+                if let heading = (annotation as? TrackingVehicleAnnotation)?.heading {
+                    view.glyphImage = rotatedGlyphImage(systemName: "bus.fill", heading: heading)
+                } else {
+                    view.glyphImage = UIImage(systemName: "bus.fill")
+                }
                 view.displayPriority = .required
             }
             return view
+        }
+
+        func mapView(_ mapView: MKMapView, didSelect view: MKAnnotationView) {
+            guard let annotation = view.annotation as? TrackingVehicleAnnotation else { return }
+            parent.onVehicleSelection(annotation.vehicle)
         }
 
         func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
@@ -273,8 +318,11 @@ struct VehicleTrackingMapRepresentable: UIViewRepresentable {
             let kind = routeOverlayKinds[ObjectIdentifier(polyline)] ?? .remaining
             switch kind {
             case .base:
-                renderer.strokeColor = UIColor.systemGray.withAlphaComponent(0.45)
-                renderer.lineWidth = 4
+                renderer.strokeColor = UIColor.systemGray.withAlphaComponent(0.18)
+                renderer.lineWidth = 5
+            case .passed:
+                renderer.strokeColor = UIColor.systemGray2.withAlphaComponent(0.95)
+                renderer.lineWidth = 6
             case .remaining:
                 renderer.strokeColor = UIColor.systemBlue.withAlphaComponent(0.90)
                 renderer.lineWidth = 6
@@ -296,8 +344,21 @@ struct VehicleTrackingMapRepresentable: UIViewRepresentable {
             overlayChangeCount += 1
             #endif
             let clamped = max(0, min(splitIndex, routeCoords.count - 2))
+            var passed = Array(routeCoords[0...clamped])
+            passed.append(projectedCoordinate)
             var upcoming = [projectedCoordinate]
             upcoming.append(contentsOf: routeCoords[(clamped + 1)...(routeCoords.count - 1)])
+
+            if passed.count >= 2 {
+                if let passedRouteOverlay {
+                    mapView.removeOverlay(passedRouteOverlay)
+                    routeOverlayKinds.removeValue(forKey: ObjectIdentifier(passedRouteOverlay))
+                }
+                let overlay = MKPolyline(coordinates: &passed, count: passed.count)
+                passedRouteOverlay = overlay
+                routeOverlayKinds[ObjectIdentifier(overlay)] = .passed
+                mapView.addOverlay(overlay)
+            }
             if upcoming.count >= 2 {
                 if let remainingRouteOverlay {
                     mapView.removeOverlay(remainingRouteOverlay)
@@ -320,6 +381,11 @@ struct VehicleTrackingMapRepresentable: UIViewRepresentable {
                 mapView.removeOverlay(remainingRouteOverlay)
                 routeOverlayKinds.removeValue(forKey: ObjectIdentifier(remainingRouteOverlay))
                 self.remainingRouteOverlay = nil
+            }
+            if let passedRouteOverlay {
+                mapView.removeOverlay(passedRouteOverlay)
+                routeOverlayKinds.removeValue(forKey: ObjectIdentifier(passedRouteOverlay))
+                self.passedRouteOverlay = nil
             }
         }
 
@@ -366,6 +432,18 @@ struct VehicleTrackingMapRepresentable: UIViewRepresentable {
             return "\(coordinates.count)-\(first.latitude)-\(first.longitude)-\(last.latitude)-\(last.longitude)"
         }
 
+        private func rotatedGlyphImage(systemName: String, heading: Double) -> UIImage? {
+            let configuration = UIImage.SymbolConfiguration(pointSize: 14, weight: .bold)
+            guard let base = UIImage(systemName: systemName, withConfiguration: configuration) else { return nil }
+            let renderer = UIGraphicsImageRenderer(size: CGSize(width: 24, height: 24))
+            return renderer.image { context in
+                let cg = context.cgContext
+                cg.translateBy(x: 12, y: 12)
+                cg.rotate(by: CGFloat(heading * .pi / 180))
+                base.draw(in: CGRect(x: -10, y: -10, width: 20, height: 20))
+            }
+        }
+
         // MARK: - Debug perf reporting (P0-5)
 
         #if DEBUG
@@ -382,37 +460,3 @@ struct VehicleTrackingMapRepresentable: UIViewRepresentable {
         #endif
     }
 }
-
-// MARK: - Supporting types
-
-enum RouteSegmentKind {
-    case base
-    case remaining
-}
-
-struct RouteProgress {
-    let segmentStartIndex: Int
-    let projectedCoordinate: CLLocationCoordinate2D
-}
-
-final class TrackingVehicleAnnotation: NSObject, MKAnnotation {
-    enum Style: Equatable {
-        case primary
-        case secondary
-    }
-
-    dynamic var coordinate: CLLocationCoordinate2D
-    dynamic var title: String?
-    dynamic var subtitle: String?
-    let vehicleId: String
-    var style: Style = .primary
-
-    init(vehicle: JourneyVehicle) {
-        self.vehicleId = vehicle.id
-        self.coordinate = vehicle.coordinate
-        self.title = vehicle.line
-        self.subtitle = vehicle.direction
-        super.init()
-    }
-}
-

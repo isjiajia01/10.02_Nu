@@ -1,6 +1,6 @@
 import Foundation
 
-enum AppLogger {
+nonisolated enum AppLogger {
     static func debug(_ message: @autoclosure () -> String) {
         #if DEBUG
         print(message())

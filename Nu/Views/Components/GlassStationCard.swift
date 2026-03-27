@@ -31,6 +31,7 @@ struct GlassStationCard: View {
             Image(systemName: "chevron.right")
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(.secondary.opacity(0.6))
+                .accessibilityHidden(true)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 12)

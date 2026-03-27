@@ -38,6 +38,8 @@ final class NearbyStationsViewModel: ObservableObject {
     private let fallbackLatitude = 55.676098
     private let cacheKey = "nearby_stations_cache_v1"
     private let cacheMaxAge: TimeInterval = 180
+    private let searchDebounceNanoseconds: UInt64 = 500_000_000
+    private let bootstrapFallbackNanoseconds: UInt64 = 2_500_000_000
 
     init(apiService: APIServiceProtocol, locationManager: LocationManaging) {
         self.apiService = apiService
@@ -106,24 +108,28 @@ final class NearbyStationsViewModel: ObservableObject {
             .receive(on: RunLoop.main)
             .sink { [weak self] location in
                 guard let self else { return }
-                self.bootstrapTask?.cancel()
-                self.bootstrapTask = nil
+                self.cancelBootstrapFallback()
                 Task { await self.fetchNearbyStations(location: location) }
             }
             .store(in: &cancellables)
     }
 
     private func scheduleBootstrapFallback() {
-        bootstrapTask?.cancel()
+        cancelBootstrapFallback()
         bootstrapTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 2_500_000_000)
             guard let self, !Task.isCancelled else { return }
+            try? await Task.sleep(nanoseconds: self.bootstrapFallbackNanoseconds)
             guard self.stations.isEmpty else { return }
             await self.fetchNearbyStations(coordX: self.fallbackLongitude, coordY: self.fallbackLatitude)
             if self.toastMessage == nil {
                 self.toastMessage = L10n.tr("stations.locationPendingFallback")
             }
         }
+    }
+
+    private func cancelBootstrapFallback() {
+        bootstrapTask?.cancel()
+        bootstrapTask = nil
     }
 
     /// 拉取附近站点。
@@ -228,9 +234,10 @@ final class NearbyStationsViewModel: ObservableObject {
     private func scheduleDebouncedFilter() {
         debounceTask?.cancel()
         debounceTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 500_000_000)
+            guard let self else { return }
+            try? await Task.sleep(nanoseconds: self.searchDebounceNanoseconds)
             guard !Task.isCancelled else { return }
-            self?.applyFilter()
+            self.applyFilter()
         }
     }
 

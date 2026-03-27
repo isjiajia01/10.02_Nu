@@ -7,7 +7,7 @@ import CoreLocation
 /// - 字段设计保持轻量，优先满足附近站点列表和距离排序需求。
 /// - `type` 是 HAFAS 地点类型（"ST"/"ADR"/"POI"），不用于交通模式推断。
 /// - 交通模式来自 `productsBitmask` / `productAtStop` / `products` token。
-struct StationModel: Codable, Identifiable, Hashable {
+nonisolated struct StationModel: Codable, Identifiable, Hashable {
     let id: String
     let extId: String?
     let globalId: String?
@@ -24,7 +24,7 @@ struct StationModel: Codable, Identifiable, Hashable {
     let zoneSource: String
     let stationGroupId: String?
 
-    enum CodingKeys: String, CodingKey {
+    nonisolated enum CodingKeys: String, CodingKey {
         case id
         case extId
         case globalId
@@ -311,14 +311,14 @@ extension StationModel {
         }
     }
 
-    enum StationMode: Hashable {
+    nonisolated enum StationMode: Hashable {
         case bus
         case metro
         case tog
         case mixed(Set<SingleMode>)
         case unknown
 
-        enum SingleMode: String, Hashable {
+        nonisolated enum SingleMode: String, Hashable {
             case bus = "BUS"
             case metro = "METRO"
             case tog = "TOG"

@@ -1,7 +1,7 @@
 import Foundation
 import CoreLocation
 
-struct StationGroupModel: Identifiable, Hashable {
+nonisolated struct StationGroupModel: Identifiable, Hashable {
     let id: String
     let baseName: String
     let stations: [StationModel]
@@ -20,11 +20,11 @@ struct StationGroupModel: Identifiable, Hashable {
         )
     }
 
-    var nearestDistanceMeters: Double? {
+    nonisolated var nearestDistanceMeters: Double? {
         stations.compactMap(\.distanceMeters).min()
     }
 
-    var entranceCount: Int {
+    nonisolated var entranceCount: Int {
         stations.count
     }
 
@@ -75,6 +75,7 @@ struct StationGroupModel: Identifiable, Hashable {
         finalMode: StationModel.StationMode
     ) {
         #if DEBUG
+        guard DebugFlags.modeDebugLoggingEnabled else { return }
         emit("[ModeDebug][Group] key=\(key) name=\"\(name)\" members=\(stations.count)")
 
         var aggregated = Set<StationModel.StationMode.SingleMode>()
@@ -100,22 +101,25 @@ struct StationGroupModel: Identifiable, Hashable {
     }
 
     private static func emit(_ message: String) {
-        fputs("\(message)\n", stderr)
+        print(message)
     }
 
-    var subtitle: String {
-        var parts: [String] = [mergedMode.primaryLabel]
+    nonisolated var subtitle: String {
+        var parts: [String] = []
+        if mergedMode != .unknown {
+            parts.append(mergedMode.primaryLabel)
+        }
         if let nearestDistanceMeters {
             parts.append(L10n.tr("station.distance.metersShort", Int(nearestDistanceMeters)))
         }
         return parts.joined(separator: " · ")
     }
 
-    var mergedHint: String {
+    nonisolated var mergedHint: String {
         L10n.tr("stations.group.mergedHint", entranceCount)
     }
 
-    func bestEntrance(preferredMode: StationModel.StationMode? = nil) -> StationModel {
+    nonisolated func bestEntrance(preferredMode: StationModel.StationMode? = nil) -> StationModel {
         let modePreference = preferredMode ?? mergedMode
         return stations.sorted { lhs, rhs in
             let lhsDist = lhs.distanceMeters ?? .greatestFiniteMagnitude
@@ -134,11 +138,11 @@ struct StationGroupModel: Identifiable, Hashable {
         }.first ?? stations[0]
     }
 
-    private func modePriority(station: StationModel, preferredMode: StationModel.StationMode) -> Int {
+    nonisolated private func modePriority(station: StationModel, preferredMode: StationModel.StationMode) -> Int {
         station.stationMode == preferredMode ? 0 : 1
     }
 
-    private func richnessScore(_ station: StationModel) -> Int {
+    nonisolated private func richnessScore(_ station: StationModel) -> Int {
         var score = 0
         score += station.products?.count ?? 0
         if station.type != nil { score += 1 }
@@ -147,7 +151,7 @@ struct StationGroupModel: Identifiable, Hashable {
     }
 }
 
-enum StationGrouping {
+nonisolated enum StationGrouping {
     static func buildGroups(_ stations: [StationModel], thresholdMeters: Double = 250) -> [StationGroupModel] {
         let sorted = stations.sorted { ($0.distanceMeters ?? .greatestFiniteMagnitude) < ($1.distanceMeters ?? .greatestFiniteMagnitude) }
 

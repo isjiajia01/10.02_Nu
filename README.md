@@ -1,6 +1,14 @@
 # Nu
 
-Native iOS transit app prototype built with SwiftUI. The project focuses on real commuter workflows: nearby stations, departure boards, journey detail, favorites, map exploration, walking ETA support, and vehicle-tracking-oriented flows backed by Rejseplanen/HAFAS-style APIs.
+`Nu` is a native iOS transit app portfolio project built with SwiftUI. It focuses on real commuter workflows: nearby stations, departure boards, journey detail, favorites, map exploration, walking ETA support, and vehicle-tracking-oriented flows backed by Rejseplanen/HAFAS-style APIs.
+
+## Portfolio Project Context
+
+This repository is published as a portfolio project.
+
+- It is intentionally more substantial than a sample CRUD app
+- It emphasizes product thinking, external API integration, app architecture, and release-minded engineering choices
+- It is meant to be readable by both engineers and hiring managers
 
 ## For Recruiters and Hiring Managers
 
@@ -142,6 +150,15 @@ Use one of these approaches:
 
 If no valid access ID is configured, API-backed runtime features fail explicitly instead of silently using a committed default.
 
+### Open-source publishing note
+
+Before pushing publicly:
+
+- keep `REJSEPLANEN_ACCESS_ID` and any optional bearer token out of git history
+- avoid committing simulator/debug artifacts from `.debug-artifacts/`
+- avoid committing local Xcode user data, caches, or `.env` files
+- rotate any credential immediately if it was ever committed by mistake
+
 ## Documentation Map
 
 - `Docs/HIRING_MANAGER_GUIDE.md`: non-engineering-friendly evaluation guide
@@ -149,6 +166,7 @@ If no valid access ID is configured, API-backed runtime features fail explicitly
 - `Docs/Privacy.md`: runtime data handling and storage notes
 - `Docs/SecurityAudit.md`: ATS, entitlement, and secret-handling posture
 - `Docs/ReleaseEngineering.md`: versioning and release checklist
+- `Docs/MapDebugging.md`: fixed simulator commands for map debugging and screenshots
 - `Docs/AppStoreReadinessChecklist.md`: audit-style readiness notes
 - `SECURITY.md`: public security reporting expectations
 

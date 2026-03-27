@@ -10,3 +10,9 @@ xcuserdata/
 
 .env
 .env.*
+.debug-artifacts/
+.derivedData/
+DerivedData/
+*.log
+airead.json
+Docs/IconPolish.md

@@ -250,6 +250,7 @@ enum TransportModeResolver {
         entries: [ProductAtStopEntry]?, modes: Set<SingleMode>, source: String
     ) {
         #if DEBUG
+        guard DebugFlags.modeDebugLoggingEnabled else { return }
         let modeStr = modes.isEmpty ? "∅" : modes.map(\.rawValue).sorted().joined(separator: ",")
         let bitmaskStr = bitmask.map { String($0) } ?? "nil"
         let tokenStr = tokens?.joined(separator: ",") ?? "nil"
