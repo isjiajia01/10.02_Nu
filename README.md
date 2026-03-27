@@ -2,6 +2,27 @@
 
 `Nu` is a native iOS transit app portfolio project built with SwiftUI. It focuses on real commuter workflows: nearby stations, departure boards, journey detail, favorites, map exploration, walking ETA support, and vehicle-tracking-oriented flows backed by Rejseplanen/HAFAS-style APIs.
 
+[![Platform](https://img.shields.io/badge/platform-iOS-blue.svg)](#project-snapshot)
+[![SwiftUI](https://img.shields.io/badge/UI-SwiftUI-0A84FF.svg)](#project-snapshot)
+[![License: MIT](https://img.shields.io/badge/license-MIT-black.svg)](./LICENSE)
+
+Native iOS transit experience for nearby discovery, departure tracking, journey drill-down, map exploration, and live vehicle context.
+
+## Highlights
+
+- Nearby stations flow driven by user location
+- Departure board with realtime-aware status and catchability context
+- Journey detail and live vehicle tracking map flows
+- Walking ETA support, favorites, cache fallback, and error-state handling
+- Privacy-aware runtime configuration with no committed production API key
+
+## Quick Start
+
+```bash
+make build
+make test
+```
+
 ## Portfolio Project Context
 
 This repository is published as a portfolio project.
