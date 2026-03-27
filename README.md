@@ -41,11 +41,9 @@ Rejseplanen / HAFAS + Apple frameworks
 - `Services/` bridges app features to APIs, location, caching, and platform capabilities
 - `Networking/` isolates request construction and transport concerns
 
-## Screenshots
+## Screenshot
 
-| Feature Preview | Station Detail / Map Flow |
-| --- | --- |
-| ![Nu screenshot](Docs/Images/feature-preview.png) | ![Nu screenshot detail](Docs/Images/feature-preview.png) |
+![Nu app screenshot](Docs/Images/feature-preview.png)
 
 ## Highlights
 
