@@ -1,18 +1,25 @@
-.DS_Store
-.derivedData/
-build/
-
+# Xcode user data
 xcuserdata/
 *.xcuserstate
-*.xcodeproj/xcuserdata/
-*.xcworkspace/xcuserdata/
-*.xcodeproj/project.xcworkspace/xcuserdata/
 
-.env
-.env.*
-.debug-artifacts/
-.derivedData/
+# Build products
 DerivedData/
-*.log
-airead.json
-Docs/IconPolish.md
+build/
+
+# Swift Package Manager
+.build/
+Packages/
+Package.resolved
+
+# CocoaPods / Carthage (if introduced later)
+Pods/
+Carthage/Build/
+
+# Fastlane
+fastlane/report.xml
+fastlane/Preview.html
+fastlane/screenshots/**/*.png
+fastlane/test_output/
+
+# macOS noise
+.DS_Store
